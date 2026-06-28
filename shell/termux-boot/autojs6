@@ -1,0 +1,40 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# AutoJS6 开机启动脚本（优化版 - 不依赖外部脚本）
+# 用途：开机启动 AutoJS6 应用，保持运行状态
+
+LOG_TAG="AutoJS6-Boot"
+
+log() {
+    /system/bin/log -t "$LOG_TAG" "$1"
+}
+
+log "=== AutoJS6 启动脚本开始 ==="
+
+# 等待开机完成
+sleep 30
+
+log "启动 AutoJS6 应用..."
+
+# 方法 1: 直接启动 AutoJS6 应用（最简单）
+am start -n org.autojs.autojs6/org.autojs.autojs.ui.main.MainActivity >/dev/null 2>&1
+
+sleep 5
+
+# 检查进程是否启动
+if pgrep -f org.autojs.autojs6 >/dev/null 2>&1; then
+    log "✓ AutoJS6 应用已启动"
+else
+    log "⚠ AutoJS6 启动失败，尝试备用方案..."
+    
+    # 方法 2: 使用猴子测试工具触发启动
+    monkey -p org.autojs.autojs6 -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+    sleep 3
+    
+    if pgrep -f org.autojs.autojs6 >/dev/null 2>&1; then
+        log "✓ AutoJS6 通过 monkey 启动成功"
+    else
+        log "✗ AutoJS6 启动失败"
+    fi
+fi
+
+log "=== AutoJS6 启动脚本完成 ==="

@@ -1,0 +1,35 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# 看门狗服务启动脚本（Termux:Boot）
+# 用途：开机启动 AutoJS6、WireGuard 和 SSH 看门狗服务
+
+LOG_TAG="Watchdog-Boot"
+
+log() {
+    /system/bin/log -t "$LOG_TAG" "$1"
+}
+
+log "=== 看门狗服务启动 ==="
+
+# 等待系统完全启动
+sleep 60
+
+log "启动 WireGuard 看门狗..."
+
+# 启动 WireGuard 看门狗（从 service.d 目录）
+nohup /system/bin/sh /data/adb/service.d/wireguard-watchdog.sh >/dev/null 2>&1 &
+WG_PID=$!
+
+sleep 2
+
+log "启动 SSH 看门狗..."
+
+# 启动 SSH 看门狗（从 service.d 目录）
+nohup /system/bin/sh /data/adb/service.d/sshd-watchdog.sh >/dev/null 2>&1 &
+SSH_PID=$!
+
+sleep 2
+
+log "✓ 所有看门狗服务已启动"
+log "WireGuard PID: $WG_PID"
+log "SSHD PID: $SSH_PID"
+log "=== 看门狗服务启动完成 ==="

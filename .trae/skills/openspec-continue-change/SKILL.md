@@ -1,0 +1,119 @@
+---
+name: openspec-continue-change
+description: 继续进行 OpenSpec 变更，创建下一个产出物。当用户想要推进变更、创建下一个产出物或继续工作流时使用。
+license: MIT
+compatibility: Requires openspec CLI.
+metadata:
+  author: openspec
+  version: "1.0"
+  generatedBy: "1.4.1"
+---
+
+继续进行变更，创建下一个产出物。
+
+**输入**：可选指定变更名称。如果省略，检查是否可以从对话上下文推断。如果模糊或不明确，你必须提示用户选择可用变更。
+
+**步骤**
+
+1. **如果未提供变更名称，提示用户选择**
+
+   运行 `openspec-cn list --json` 获取按最近修改时间排序的可用变更。然后使用 **AskUserQuestion tool** 让用户选择要继续的变更。
+
+   展示最近修改的前 3-4 个变更作为选项，显示：
+   - 变更名称
+   - Schema（来自 `schema` 字段，如果没有则为 "spec-driven"）
+   - 状态（如 "0/5 任务"、"完成"、"无任务"）
+   - 最近修改时间（来自 `lastModified` 字段）
+
+   将最近修改的变更标记为"（推荐）"，因为它很可能是用户想要继续的。
+
+   **重要**：不要猜测或自动选择变更。始终让用户选择。
+
+2. **检查当前状态**
+   ```bash
+   openspec-cn status --change "<name>" --json
+   ```
+   解析 JSON 了解当前状态。响应包含：
+   - `schemaName`：使用的工作流 Schema（如 "spec-driven"）
+   - `artifacts`：产出物数组及其状态（"done"、"ready"、"blocked"）
+   - `isComplete`：布尔值，表示是否所有产出物已完成
+   - `planningHome`、`changeRoot`、`artifactPaths` 和 `actionContext`：路径和范围上下文。使用这些而非假设仓库本地路径。
+
+3. **根据状态采取行动**：
+
+   ---
+
+   **如果所有产出物已完成（`isComplete: true`）**：
+   - 恭喜用户
+   - 显示最终状态，包括使用的 Schema
+   - 建议："所有产出物已创建！你现在可以实现此变更或归档它。"
+   - 停止
+
+   ---
+
+   **如果有产出物可以创建**（状态显示 `status: "ready"` 的产出物）：
+   - 选取状态输出中第一个 `status: "ready"` 的产出物
+   - 获取其指令：
+     ```bash
+     openspec-cn instructions <artifact-id> --change "<name>" --json
+     ```
+   - 解析 JSON。关键字段：
+     - `context`：项目背景（你的约束 - 不要包含在输出中）
+     - `rules`：产出物特定规则（你的约束 - 不要包含在输出中）
+     - `template`：用于输出文件的结构
+     - `instruction`：Schema 特定的指导
+     - `resolvedOutputPath`：解析后的路径或写入产出物的模式
+     - `dependencies`：需要读取以获取上下文的已完成产出物
+   - **创建产出物文件**：
+     - 读取任何已完成的依赖文件以获取上下文
+     - 使用 `template` 作为结构 - 填充其各个部分
+     - 将 `context` 和 `rules` 作为写作时的约束应用 - 但不要复制到文件中
+     - 写入指令中指定的 `resolvedOutputPath`。如果是 glob 模式，使用 Schema 指令和工作区规划上下文选择具体文件路径
+   - 显示创建了什么以及现在解锁了什么
+   - 创建一个产出物后停止
+
+   ---
+
+   **如果没有产出物就绪（全部被阻塞）**：
+   - 对于有效的 Schema 这不应该发生
+   - 显示状态并建议检查问题
+
+4. **创建产出物后，显示进度**
+   ```bash
+   openspec-cn status --change "<name>"
+   ```
+
+**输出**
+
+每次调用后，显示：
+- 创建了哪个产出物
+- 使用的 Schema 工作流
+- 当前进度（N/M 完成）
+- 哪些产出物现在已解锁
+- 提示："想继续吗？告诉我继续或告诉我下一步做什么。"
+
+**产出物创建指南**
+
+产出物类型及其用途取决于 Schema。使用指令输出中的 `instruction` 字段了解要创建什么。
+
+常见产出物模式：
+
+**spec-driven Schema**（提案 → 规范 → 设计 → 任务）：
+- **proposal.md**：如果不清楚，询问用户关于变更的信息。填写原因、变更内容、能力、影响。
+  - 能力部分至关重要 - 列出的每个能力都需要一个规范文件。
+- **specs/<capability>/spec.md**：为提案能力部分中列出的每个能力创建一个规范（使用能力名称，而非变更名称）。
+- **design.md**：记录技术决策、架构和实现方法。
+- **tasks.md**：将实现分解为复选框任务。
+
+对于其他 Schema，遵循 CLI 输出中的 `instruction` 字段。
+
+**护栏**
+- 每次调用创建一个产出物
+- 创建新产出物前始终读取依赖产出物
+- 永远不要跳过产出物或乱序创建
+- 如果上下文不清楚，创建前询问用户
+- 写入后验证产出物文件存在，然后再标记进度
+- 使用 Schema 的产出物序列，不要假设特定的产出物名称
+- **重要**：`context` 和 `rules` 是对你的约束，不是文件内容
+  - 不要将 `<context>`、`<rules>`、`<project_context>` 块复制到产出物中
+  - 这些指导你写什么，但永远不应出现在输出中

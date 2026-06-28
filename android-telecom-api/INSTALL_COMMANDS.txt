@@ -1,0 +1,6 @@
+cd ~/downloads/android-telecom-api
+chmod +x install.sh start-service.sh
+./install.sh
+./start-service.sh start
+./start-service.sh status
+./start-service.sh token

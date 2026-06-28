@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.bak
+*.orig
+
+# 数据库文件（如果包含敏感数据）
+*.db
+
+# 配置文件（如果包含密码等敏感信息）
+# .env
+# config.json

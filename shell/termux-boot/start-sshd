@@ -1,0 +1,18 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux SSH 启动脚本
+
+LOG_TAG="Termux-SSH"
+
+log() {
+    /system/bin/log -t "$LOG_TAG" "$1"
+}
+
+log "启动 SSH 服务"
+termux-wake-lock
+/data/data/com.termux/files/usr/bin/sshd
+
+if pgrep -f sshd >/dev/null 2>&1; then
+    log "✓ SSH 启动成功"
+else
+    log "✗ SSH 启动失败"
+fi
