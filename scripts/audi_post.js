@@ -23,7 +23,8 @@ var CONFIG = {
     mode: "featured"
   },
   remoteUseAsync: true,
-  remoteTimeoutSec: 600,
+  // 同步接口超时时间增大到 900 秒（15 分钟），因为发帖逻辑复杂，生成帖子时间长
+  remoteTimeoutSec: 900,
   remotePollIntervalMs: 2000,
   remotePollTimeoutMs: 600000,
   remotePollSchedule: [
@@ -321,12 +322,20 @@ function fetchRemotePostDataByBatch() {
   }
   var taskId = String(json.taskId);
 
+  // 异步接口调用成功后息屏，参考 xh_signin.js 的息屏逻辑
+  logStage("异步调用成功", "taskId=" + taskId + ", 执行息屏");
+  if (device.isScreenOn()) {
+    device.cancelKeepingAwake();
+    shell("input keyevent 223", true);
+    sleep(1000);
+  }
+
   var startAt = Date.now();
   var deadline = startAt + CONFIG.remotePollTimeoutMs;
   var lastStageText = "";
   var consecutiveErrors = 0;
   var maxConsecutiveErrors = typeof CONFIG.remoteFallbackMaxConsecutiveErrors === "number" ? CONFIG.remoteFallbackMaxConsecutiveErrors : 0;
-  logStage("轮询任务", "taskId=" + taskId + ", timeoutMs=" + CONFIG.remotePollTimeoutMs);
+  logStage("轮询任务", "taskId=" + taskId + ", timeoutMs=" + CONFIG.remotePollTimeoutMs + ", 息屏等待中");
   while (true) {
     var now = Date.now();
     if (now >= deadline) {
@@ -393,10 +402,14 @@ function fetchRemotePostDataByBatch() {
       var results = taskJson.results;
       if (results && results.length) {
         logStage("轮询任务完成", "taskId=" + taskId);
-      // 保存 taskId 用于后续回调
-      postTaskId = results[0].taskId;
-      logStage("生成内容", "taskId=" + postTaskId);
-      return results[0];
+        // 获取到帖子内容后亮屏，参考 xh_signin.js 的亮屏逻辑
+        logStage("获取到帖子内容", "执行亮屏处理后续逻辑");
+        device.wakeUpIfNeeded();
+        device.keepScreenDim(typeof CONFIG.keepScreenOnMs === "number" ? CONFIG.keepScreenOnMs : 1200000);
+        // 保存 taskId 用于后续回调
+        postTaskId = results[0].taskId;
+        logStage("生成内容", "taskId=" + postTaskId);
+        return results[0];
       }
       throw new Error("任务已完成但无 results");
     }

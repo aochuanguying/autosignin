@@ -136,6 +136,12 @@ function main() {
         if (!rqrunOk) failureDetails.push("【RQrun 签到】失败");
         if (!audiPostOk) failureDetails.push("【奥迪发帖】失败");
         
+        // 检查是否有失败项，避免发送空消息
+        if (failureDetails.length === 0) {
+            console.log("⚠️ 告警消息为空，跳过发送通知");
+            return;
+        }
+        
         var title = "签到任务异常";
         var message = failureDetails.join("、");
         
