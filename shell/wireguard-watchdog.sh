@@ -54,6 +54,9 @@ restart_tunnel() {
         log "  broadcast 关闭无效，强制重启 WireGuard..."
         am force-stop com.wireguard.android
         sleep 2
+        # 拉起 App 主界面，确保 UI 就绪（后续 AutoJS 兜底时不会找不到控件）
+        am start -n com.wireguard.android/.activity.MainActivity >/dev/null 2>&1
+        sleep 3
     fi
 
     # Step 2: 重新启动隧道

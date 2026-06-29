@@ -1796,10 +1796,13 @@ android-telecom-api/
 | **脚本文件** | `server.py` | `call_sms_forwarding.py` |
 
 **系统特点**：
-- ✅ 基于 SQLite 数据库轮询（可靠性优先）
-- ✅ 状态持久化，重启不丢失
-- ✅ 双重去重机制（时间戳 + _id）
-- ✅ Bark iOS 推送通知
+- ✅ 四维度独立状态模型：http_call | http_sms | bark_call | bark_sms
+- ✅ 纯 ID 增量查询，无时间戳依赖（避免同毫秒遗漏）
+- ✅ HTTP 转发和 Bark 推送完全解耦，互不干扰
+- ✅ 状态持久化到 SQLite 数据库，重启不丢失
+- ✅ 启动补偿机制：服务重启后自动补推遗漏事件
+- ✅ 看门狗守护进程：服务挂掉自动拉起（`forward-watchdog.sh`）
+- ✅ 日志轮转（RotatingFileHandler），日志存放于脚本同目录
 - ✅ 生产环境部署（HTTPS）
 
 ---
@@ -1807,515 +1810,130 @@ android-telecom-api/
 ### call_sms_forwarding.py 完整源码
 
 **脚本位置**: 
-- 本地：`/Users/mac/Documents/workspace/krio/autosignin/scripts/call_sms_forwarding.py`
+- 本地：`shell/call_sms_forwarding.py`
 - 手机：`/data/data/com.termux/files/home/scripts/call_sms_forwarding.py`
 
-**完整源码**:
-
-```python
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-未接来电 & 短信转发服务
-运行在已 Root 的 Android 设备 Termux 环境中
-通过 Root + sqlite3 轮询系统数据库，检测新事件并通过 HTTP API 转发到远程服务器
-"""
-
-import json
-import subprocess
-import logging
-import os
-import time
-import threading
-import urllib.request
-import urllib.error
-
-# ============================================================
-# 配置项（直接修改此处，重启不丢失）
-# ============================================================
-
-# 测试模式：True = 仅记录到日志文件不调 API，False = 正常转发
-TEST_MODE = False
-
-# 事件日志文件路径（测试模式下使用）
-EVENT_LOG_FILE = "/sdcard/脚本/call_sms_events.log"
-
-# Bark 推送配置（iOS 实时通知）
-BARK_URL = "https://api.day.app/Asbu4fr2HjGAjKbHANNbLS"
-BARK_ENABLED = True  # 是否启用 Bark 推送
-BARK_ICON = "https://sf16-passport-sg.ibytedtos.com/img/user-avatar-alisg/4b93e0266e7787e68d447ef7231066fe~128x128.image"  # 自定义图标
-
-# 服务器基础 URL（生产环境）
-SERVER_BASE_URL = "https://yqad.hxfssc.com:8088"
-
-# 转发 API 路径
-CALL_FORWARD_PATH = "/api/posts/mobile/missed-calls"
-SMS_FORWARD_PATH = "/api/posts/mobile/sms"
-
-# API Token（外部设备访问，格式：Bearer <token>）
-API_TOKEN = "api_token_c5d7f7a306cbd78886ae57d6547aee48d59eeeb94de29234972a074105dc0aff"
-
-# 轮询间隔（秒）- 短信优先级更高，轮询更频繁
-CALL_POLL_INTERVAL = 10  # 来电轮询间隔
-SMS_POLL_INTERVAL = 5   # 短信轮询间隔（更及时）
-
-# HTTP 请求超时（秒）
-HTTP_TIMEOUT = 15
-
-# 状态数据库路径（放在脚本运行目录下）
-STATE_DB = "/data/data/com.termux/files/home/scripts/call_sms_forwarding_state.db"
-
-# 数据库路径
-CALL_LOG_DB = "/data/data/com.android.providers.contacts/databases/calllog.db"
-SMS_DB = "/data/data/com.android.providers.telephony/databases/mmssms.db"
-
-# Termux sqlite3 路径
-SQLITE3_PATH = "/data/data/com.termux/files/usr/bin/sqlite3"
-
-# ============================================================
-# 日志配置
-# ============================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
-
-# ============================================================
-# 状态管理
-# ============================================================
-
-
-def init_state_db():
-    """初始化状态数据库"""
-    try:
-        commands = [
-            "CREATE TABLE IF NOT EXISTS forward_state (id INTEGER PRIMARY KEY, last_call_timestamp TEXT, last_call_id INTEGER, last_sms_timestamp TEXT, last_sms_id INTEGER, pending_calls TEXT, pending_sms TEXT);",
-            "INSERT OR IGNORE INTO forward_state (id, last_call_timestamp, last_call_id, last_sms_timestamp, last_sms_id, pending_calls, pending_sms) VALUES (1, '0', 0, '0', 0, '[]', '[]');"
-        ]
-        
-        for sql in commands:
-            command = ['su', '-c', f'{SQLITE3_PATH} {STATE_DB} "{sql}"']
-            try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=10)
-                if result.returncode != 0 and "already exists" not in result.stderr:
-                    logger.error(f"SQL 执行失败：{result.stderr}")
-            except Exception as e:
-                logger.error(f"SQL 执行异常：{e}")
-    except Exception as e:
-        logger.error(f"初始化状态数据库异常：{e}")
-
-
-def load_state():
-    """从数据库加载转发状态"""
-    init_state_db()
-    
-    try:
-        sql = "SELECT last_call_timestamp, last_call_id, last_sms_timestamp, last_sms_id, pending_calls, pending_sms FROM forward_state WHERE id = 1;"
-        command = ['su', '-c', f'{SQLITE3_PATH} {STATE_DB} "{sql}"']
-        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
-        
-        if result.returncode == 0 and result.stdout:
-            parts = result.stdout.split("|")
-            if len(parts) >= 6:
-                state = {
-                    "last_call_timestamp": parts[0] or "0",
-                    "last_call_id": int(parts[1]) if parts[1] else 0,
-                    "last_sms_timestamp": parts[2] or "0",
-                    "last_sms_id": int(parts[3]) if parts[3] else 0,
-                    "pending_calls": json.loads(parts[4] or "[]"),
-                    "pending_sms": json.loads(parts[5] or "[]")
-                }
-                logger.info(f"加载状态成功：call_id={state['last_call_id']}, sms_id={state['last_sms_id']}")
-                return state
-            else:
-                logger.warning(f"状态字段数量不足：{len(parts)}, stdout='{result.stdout}'")
-        else:
-            logger.warning(f"加载状态数据库失败：returncode={result.returncode}, stdout='{result.stdout}', stderr='{result.stderr}'")
-    except Exception as e:
-        logger.warning(f"加载状态数据库异常：{e}")
-    
-    logger.warning("使用初始状态：call_id=0, sms_id=0")
-    return {
-        "last_call_timestamp": "0",
-        "last_sms_timestamp": "0",
-        "last_call_id": 0,
-        "last_sms_id": 0,
-        "pending_calls": [],
-        "pending_sms": []
-    }
-
-
-def save_state(state, update_type='both'):
-    """保存转发状态到数据库
-    
-    Args:
-        state: 状态字典
-        update_type: 'call' | 'sms' | 'both' - 更新哪种状态
-    """
-    init_state_db()
-    
-    try:
-        if update_type == 'call':
-            sql = f"UPDATE forward_state SET last_call_timestamp = '{state['last_call_timestamp']}', last_call_id = {state['last_call_id']}, pending_calls = '{json.dumps(state.get('pending_calls', []))}' WHERE id = 1;"
-        elif update_type == 'sms':
-            sql = f"UPDATE forward_state SET last_sms_timestamp = '{state['last_sms_timestamp']}', last_sms_id = {state['last_sms_id']}, pending_sms = '{json.dumps(state.get('pending_sms', []))}' WHERE id = 1;"
-        else:
-            sql = f"UPDATE forward_state SET last_call_timestamp = '{state['last_call_timestamp']}', last_call_id = {state['last_call_id']}, last_sms_timestamp = '{state['last_sms_timestamp']}', last_sms_id = {state['last_sms_id']}, pending_calls = '{json.dumps(state.get('pending_calls', []))}', pending_sms = '{json.dumps(state.get('pending_sms', []))}' WHERE id = 1;"
-        
-        command = ['su', '-c', f'{SQLITE3_PATH} {STATE_DB} "{sql}"']
-        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
-        if result.returncode != 0:
-            logger.error(f"保存状态数据库失败：{result.stderr}")
-    except Exception as e:
-        logger.error(f"保存状态数据库异常：{e}")
-
-
-# ============================================================
-# Shell 命令执行
-# ============================================================
-
-
-def execute_shell(command):
-    """执行 shell 命令并返回结果"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=15
-        )
-        return {
-            "success": result.returncode == 0,
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-            "returncode": result.returncode
-        }
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "Command timeout", "returncode": -1}
-    except Exception as e:
-        return {"success": False, "error": str(e), "returncode": -1}
-
-
-def check_root():
-    """检查 Root 权限"""
-    result = execute_shell('su -c "echo root_ok"')
-    return result["success"] and "root_ok" in result["stdout"]
-
-
-# ============================================================
-# 数据库查询
-# ============================================================
-
-
-def query_missed_calls(last_timestamp, last_id=0):
-    """查询未接来电（type=3），按 date 增量 + _id 去重"""
-    command = (
-        f'su -c "{SQLITE3_PATH} {CALL_LOG_DB} '
-        f"\\\"SELECT _id, number, date FROM calls "
-        f"WHERE type = 3 AND date > {last_timestamp} "
-        f'ORDER BY date ASC;\\\""'
-    )
-    result = execute_shell(command)
-    if not result["success"]:
-        logger.error(f"查询通话记录失败：{result.get('stderr', result.get('error'))}")
-        return []
-
-    calls = []
-    lines = result["stdout"].split("\n") if result["stdout"] else []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("|")
-        if len(parts) >= 3:
-            call_id = int(parts[0])
-            if call_id <= last_id:
-                continue
-            calls.append({
-                "call_id": call_id,
-                "phone_number": parts[1],
-                "call_time": parts[2]
-            })
-    return calls
-
-
-def query_new_sms(last_timestamp, last_id=0):
-    """查询新接收短信（type=1），按 date 增量 + _id 去重"""
-    command = (
-        f'su -c "{SQLITE3_PATH} {SMS_DB} '
-        f"\\\"SELECT _id, address, body, date FROM sms "
-        f"WHERE type = 1 AND date > {last_timestamp} "
-        f'ORDER BY date ASC;\\\""'
-    )
-    result = execute_shell(command)
-    if not result["success"]:
-        logger.error(f"查询短信数据库失败：{result.get('stderr', result.get('error'))}")
-        return []
-
-    sms_list = []
-    lines = result["stdout"].split("\n") if result["stdout"] else []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("|")
-        if len(parts) >= 4:
-            sms_id = int(parts[0])
-            if sms_id <= last_id:
-                continue
-            sms_list.append({
-                "sms_id": sms_id,
-                "phone_number": parts[1],
-                "content": parts[2],
-                "sms_time": parts[3]
-            })
-    return sms_list
-
-
-# ============================================================
-# HTTP 转发
-# ============================================================
-
-
-def ms_to_iso(ms_timestamp):
-    """将 Unix 毫秒时间戳转为 ISO 8601 格式"""
-    try:
-        from datetime import datetime, timezone
-        dt = datetime.fromtimestamp(int(ms_timestamp) / 1000, tz=timezone.utc)
-        return dt.isoformat()
-    except Exception:
-        return datetime.now(timezone.utc).isoformat()
-
-
-def http_post(url, data):
-    """发送 HTTP POST 请求（Bearer Token 认证）"""
-    try:
-        json_data = json.dumps(data).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=json_data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {API_TOKEN}"
-            },
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            return {"success": True, "status": resp.status}
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        return {"success": False, "status": e.code, "error": f"{e} | {body}"}
-    except urllib.error.URLError as e:
-        return {"success": False, "error": str(e.reason)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-def write_event_log(event_type, data):
-    """将事件写入日志文件"""
-    try:
-        log_dir = os.path.dirname(EVENT_LOG_FILE)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        with open(EVENT_LOG_FILE, "a") as f:
-            f.write(f"[{timestamp}] {event_type} | {json.dumps(data, ensure_ascii=False)}\n")
-    except Exception as e:
-        logger.error(f"写入事件日志失败：{e}")
-
-
-def ms_to_readable(ms_timestamp):
-    """将 Unix 毫秒时间戳转为可读格式"""
-    try:
-        from datetime import datetime, timezone, timedelta
-        tz = timezone(timedelta(hours=8))
-        dt = datetime.fromtimestamp(int(ms_timestamp) / 1000, tz=tz)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return ms_timestamp
-
-
-def bark_push(title, body):
-    """通过 Bark 推送通知到 iOS 设备"""
-    if not BARK_ENABLED:
-        return True
-    try:
-        import urllib.parse
-        encoded_title = urllib.parse.quote(title, safe="")
-        encoded_body = urllib.parse.quote(body, safe="")
-        icon_url = urllib.parse.quote(BARK_ICON, safe="")
-        url = f"{BARK_URL}/{encoded_title}/{encoded_body}?icon={icon_url}"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return True
-    except Exception as e:
-        logger.error(f"Bark 推送失败：{e}")
-        return False
-
-
-def forward_call(call):
-    """转发单条未接来电"""
-    data = {
-        "phone_number": call["phone_number"],
-        "received_at": ms_to_iso(call["call_time"])
-    }
-    if TEST_MODE:
-        write_event_log("MISSED_CALL", data)
-        logger.info(f"📞 未接来电：{call['phone_number']} (time={call['call_time']})")
-        return True
-
-    url = f"{SERVER_BASE_URL}{CALL_FORWARD_PATH}"
-    result = http_post(url, data)
-    if result["success"]:
-        logger.info(f"✓ 未接来电已转发：{call['phone_number']} (time={call['call_time']})")
-        bark_push(call["phone_number"], f"未接来电：{ms_to_readable(call['call_time'])}")
-    else:
-        logger.error(f"✗ 未接来电转发失败：{call['phone_number']}, 原因：{result.get('error')}")
-    return result["success"]
-
-
-def forward_sms(sms):
-    """转发单条短信"""
-    data = {
-        "phone_number": sms["phone_number"],
-        "content": sms["content"],
-        "received_at": ms_to_iso(sms["sms_time"])
-    }
-    if TEST_MODE:
-        write_event_log("NEW_SMS", data)
-        logger.info(f"💬 新短信：{sms['phone_number']} | {sms['content'][:50]}... (time={sms['sms_time']})")
-        return True
-
-    url = f"{SERVER_BASE_URL}{SMS_FORWARD_PATH}"
-    result = http_post(url, data)
-    if result["success"]:
-        logger.info(f"✓ 短信已转发：{sms['phone_number']} (time={sms['sms_time']})")
-        bark_push(sms["phone_number"], sms["content"])
-    else:
-        logger.error(f"✗ 短信转发失败：{sms['phone_number']}, 原因：{result.get('error')}")
-    return result["success"]
-
-
-# ============================================================
-# 轮询循环
-# ============================================================
-
-
-def poll_missed_calls(state):
-    """轮询未接来电"""
-    new_calls = query_missed_calls(state["last_call_timestamp"], state.get("last_call_id", 0))
-
-    pending = state.get("pending_calls", [])
-    if pending:
-        logger.info(f"重试转发 {len(pending)} 条待处理的未接来电...")
-        still_pending = []
-        for call in pending:
-            if not forward_call(call):
-                still_pending.append(call)
-        state["pending_calls"] = still_pending
-
-    for call in new_calls:
-        if not forward_call(call):
-            state["pending_calls"].append(call)
-
-    if new_calls:
-        state["last_call_timestamp"] = new_calls[-1]["call_time"]
-        state["last_call_id"] = new_calls[-1]["call_id"]
-
-
-def poll_new_sms(state):
-    """轮询新短信"""
-    new_sms_list = query_new_sms(state["last_sms_timestamp"], state.get("last_sms_id", 0))
-
-    pending = state.get("pending_sms", [])
-    if pending:
-        logger.info(f"重试转发 {len(pending)} 条待处理的短信...")
-        still_pending = []
-        for sms in pending:
-            if not forward_sms(sms):
-                still_pending.append(sms)
-        state["pending_sms"] = still_pending
-
-    for sms in new_sms_list:
-        if not forward_sms(sms):
-            state["pending_sms"].append(sms)
-
-    if new_sms_list:
-        state["last_sms_timestamp"] = new_sms_list[-1]["sms_time"]
-        state["last_sms_id"] = new_sms_list[-1]["sms_id"]
-
-
-def call_poll_loop():
-    """来电轮询线程"""
-    logger.info(f"来电监听已启动（间隔 {CALL_POLL_INTERVAL}s）")
-    while True:
-        try:
-            state = load_state()
-            poll_missed_calls(state)
-            save_state(state, update_type='call')
-        except Exception as e:
-            logger.error(f"来电轮询异常：{e}")
-        time.sleep(CALL_POLL_INTERVAL)
-
-
-def sms_poll_loop():
-    """短信轮询线程"""
-    logger.info(f"短信监听已启动（间隔 {SMS_POLL_INTERVAL}s）")
-    while True:
-        try:
-            state = load_state()
-            poll_new_sms(state)
-            save_state(state, update_type='sms')
-        except Exception as e:
-            logger.error(f"短信轮询异常：{e}")
-        time.sleep(SMS_POLL_INTERVAL)
-
-
-# ============================================================
-# 主入口
-# ============================================================
-
-
-def main():
-    logger.info("=== 未接来电 & 短信转发服务启动 ===")
-
-    if TEST_MODE:
-        logger.info("⚠ 测试模式：事件将记录到日志文件，不调用转发 API")
-        logger.info(f"事件日志：{EVENT_LOG_FILE}")
-
-    if not check_root():
-        logger.error("未检测到 Root 权限，服务无法运行")
-        return
-
-    logger.info(f"服务器：{SERVER_BASE_URL}")
-    logger.info(f"来电 API：{CALL_FORWARD_PATH}")
-    logger.info(f"短信 API：{SMS_FORWARD_PATH}")
-    logger.info(f"状态数据库：{STATE_DB}")
-
-    call_thread = threading.Thread(target=call_poll_loop, daemon=True)
-    sms_thread = threading.Thread(target=sms_poll_loop, daemon=True)
-
-    call_thread.start()
-    sms_thread.start()
-
-    logger.info("服务已启动，等待事件...")
-
-    try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        logger.info("服务已停止")
-
-
-if __name__ == "__main__":
-    main()
+> **注意**: 完整源码请直接查看仓库中的 `shell/call_sms_forwarding.py`，文档不再内嵌完整代码（避免同步问题）。以下为架构概述。
+
+**核心架构**：
+
+```
+┌──────────────────────────────────────────────────────┐
+│                 poll_loop()                          │
+│  启动时 → compensate() 补偿遗漏记录                   │
+│  每 5s  → poll_and_forward() 四维度独立轮询           │
+├──────────────────────────────────────────────────────┤
+│  HTTP + 未接来电  │  HTTP + 短信  │  Bark + 未接来电  │  Bark + 短信 │
+│  http_call       │  http_sms     │  bark_call       │  bark_sms   │
+│      ↓           │      ↓       │      ↓           │      ↓      │
+│  query_missed_   │  query_new_  │  query_missed_   │  query_new_ │
+│  calls_by_id()   │  sms_by_id() │  calls_by_id()   │  sms_by_id()│
+│      ↓           │      ↓       │      ↓           │      ↓      │
+│  forward_call_   │  forward_sms │  forward_call_   │  forward_sms│
+│  via_http()      │  _via_http() │  via_bark()      │  _via_bark()│
+│      ↓           │      ↓       │      ↓           │      ↓      │
+│  save_state(     │  save_state( │  save_state(     │  save_state(│
+│  "http_call")    │  "http_sms") │  "bark_call")    │  "bark_sms")│
+└──────────────────────────────────────────────────────┘
+```
+
+**关键函数**：
+
+| 函数 | 说明 |
+|------|------|
+| `run_root_sql(sql)` | 通过临时文件+shell重定向执行SQL，避免引号转义 |
+| `load_state()` | 加载四个维度独立状态 |
+| `save_state(state, type)` | 按单个维度保存状态（纯数字/文本，无JSON） |
+| `query_missed_calls_by_id(since_id)` | 纯ID增量查询未接来电 |
+| `query_new_sms_by_id(since_id)` | 纯ID增量查询短信 |
+| `compensate(state)` | 启动补偿：扫描last_id之后的遗漏记录 |
+| `poll_and_forward(state)` | 四维度独立轮询转发 |
+
+**状态数据库表结构**：
+
+```sql
+CREATE TABLE forward_state (
+  id INTEGER PRIMARY KEY,
+  http_call_ts TEXT DEFAULT '0',   http_call_id INTEGER DEFAULT 0,
+  http_sms_ts  TEXT DEFAULT '0',   http_sms_id  INTEGER DEFAULT 0,
+  bark_call_ts TEXT DEFAULT '0',   bark_call_id INTEGER DEFAULT 0,
+  bark_sms_ts  TEXT DEFAULT '0',   bark_sms_id  INTEGER DEFAULT 0
+);
+```
+
+---
+
+### 转发看门狗 (forward-watchdog.sh)
+
+**脚本位置**:
+- 本地：`shell/forward-watchdog.sh`
+- 手机：`/data/adb/service.d/forward-watchdog.sh`
+
+**功能**: 以 root 身份持续监控 `call_sms_forwarding.py` 进程，挂掉自动拉起。
+
+**工作原理**:
+- 每 30 秒通过 `pgrep -f call_sms_forwarding.py` 检查进程是否存在
+- 如进程不存在，自动启动（最多重试 3 次，间隔 5 秒）
+- 日志通过 logcat 记录（tag: `Forward-Watchdog`）
+- 启动时加载 `forward_token` 环境变量
+
+**完整源码**（[forward-watchdog.sh](file:///Users/wangfuwei/Documents/Workspace/krio/autosignin/shell/forward-watchdog.sh)）：
+
+```bash
+#!/system/bin/sh
+# 未接来电 & 短信转发服务看门狗
+# 用途：监控 call_sms_forwarding.py 进程，挂掉自动重启
+# 放置位置：/data/adb/service.d/forward-watchdog.sh
+
+LOG_TAG="Forward-Watchdog"
+CHECK_INTERVAL=30
+MAX_RETRY=3
+RETRY_DELAY=5
+
+FORWARD_SCRIPT="/data/data/com.termux/files/home/scripts/call_sms_forwarding.py"
+PYTHON3="/data/data/com.termux/files/usr/bin/python3"
+PID_FILE="/data/data/com.termux/files/home/.telecom-api/forward.pid"
+TOKEN_FILE="/data/data/com.termux/files/home/.telecom-api/forward_token"
+
+log() {
+    /system/bin/log -t "$LOG_TAG" "$1"
+}
+
+log "看门狗启动"
+log "监控脚本：$FORWARD_SCRIPT"
+log "检查间隔：${CHECK_INTERVAL}秒"
+
+sleep 60
+
+while true; do
+    if pgrep -f "call_sms_forwarding.py" >/dev/null 2>&1; then
+        sleep "$CHECK_INTERVAL"
+    else
+        log "⚠ 检测到转发服务未运行，准备启动..."
+        success=0
+        for i in $(seq 1 $MAX_RETRY); do
+            log "  启动尝试 $i/$MAX_RETRY"
+            if [ -f "$TOKEN_FILE" ]; then
+                export FORWARD_API_TOKEN=$(cat "$TOKEN_FILE")
+            fi
+            mkdir -p /data/data/com.termux/files/home/.telecom-api
+            nohup $PYTHON3 "$FORWARD_SCRIPT" >/dev/null 2>&1 &
+            FORWARD_PID=$!
+            echo $FORWARD_PID > "$PID_FILE"
+            sleep 5
+            if kill -0 $FORWARD_PID 2>/dev/null; then
+                log "✓ 转发服务启动成功 (PID: $FORWARD_PID)"
+                success=1
+                break
+            fi
+            log "  启动失败，${RETRY_DELAY}秒后重试..."
+            sleep "$RETRY_DELAY"
+        done
+        if [ $success -eq 0 ]; then
+            log "✗ 转发服务启动失败，将在下次循环继续尝试"
+        fi
+    fi
+done
 ```
 
 ---
@@ -2327,6 +1945,9 @@ if __name__ == "__main__":
 | 配置项 | 说明 | 示例值 |
 |--------|------|--------|
 | TEST_MODE | 测试模式开关 | `False` = 生产模式 |
+| SCRIPT_DIR | 脚本运行目录 | 自动检测 |
+| LOG_FILE | 运行日志路径 | `脚本目录/call_sms_forwarding.log` |
+| EVENT_LOG_FILE | 事件日志路径（测试模式） | `脚本目录/call_sms_events.log` |
 | BARK_URL | Bark 推送密钥 | `https://api.day.app/你的密钥` |
 | BARK_ENABLED | 是否启用 Bark 推送 | `True` |
 | BARK_ICON | Bark 推送自定义图标 | 图片 URL |
@@ -2334,6 +1955,7 @@ if __name__ == "__main__":
 | API_TOKEN | API 认证 Token | `api_token_xxx` |
 | CALL_POLL_INTERVAL | 来电轮询间隔（秒） | `10` |
 | SMS_POLL_INTERVAL | 短信轮询间隔（秒） | `5` |
+| STATE_DB | 状态数据库路径 | 脚本目录下 |
 
 ---
 
@@ -2345,33 +1967,49 @@ if __name__ == "__main__":
 3. ✅ Termux 已安装 Python 3 和 sqlite3
 4. ✅ 手机已授予 Termux Root 权限
 
-**部署命令**：
+**部署转发脚本**：
 
 ```bash
 # 1. 推送脚本到手机
-adb push /Users/mac/Documents/workspace/krio/autosignin/scripts/call_sms_forwarding.py /sdcard/脚本/
+adb -s <device> push shell/call_sms_forwarding.py /sdcard/
 
-# 2. 复制到 Termux 脚本目录
-adb shell "su -c 'cp /sdcard/脚本/call_sms_forwarding.py /data/data/com.termux/files/home/scripts/'"
+# 2. 复制到 Termux 脚本目录（需要 root）
+adb -s <device> shell "su -c 'cp /sdcard/call_sms_forwarding.py /data/data/com.termux/files/home/scripts/'"
 
 # 3. 赋予执行权限
-adb shell "su -c 'chmod +x /data/data/com.termux/files/home/scripts/call_sms_forwarding.py'"
+adb -s <device> shell "su -c 'chmod 755 /data/data/com.termux/files/home/scripts/call_sms_forwarding.py'"
+```
 
-# 4. 启动服务
-adb shell "su -c 'nohup /data/data/com.termux/files/usr/bin/python3 /data/data/com.termux/files/home/scripts/call_sms_forwarding.py > /sdcard/脚本/forward.log 2>&1 &'"
+**部署看门狗**（守护进程自动拉起）：
+
+```bash
+# 1. 推送看门狗脚本
+adb -s <device> push shell/forward-watchdog.sh /sdcard/
+
+# 2. 复制到 service.d 目录（root 权限）
+adb -s <device> shell "su -c 'cp /sdcard/forward-watchdog.sh /data/adb/service.d/ && chmod 755 /data/adb/service.d/forward-watchdog.sh'"
+
+# 3. 启动看门狗
+adb -s <device> shell "su -c 'nohup /system/bin/sh /data/adb/service.d/forward-watchdog.sh >/dev/null 2>&1 &'"
 ```
 
 **检查服务状态**：
 
 ```bash
-# 查看进程
-adb shell "su -c 'ps | grep call_sms_forwarding'"
+# 查看转发服务进程
+adb -s <device> shell "su -c 'ps -A | grep call_sms_forwarding'"
 
-# 查看日志
-adb shell "cat /sdcard/脚本/forward.log"
+# 查看看门狗进程
+adb -s <device> shell "su -c 'ps -A | grep forward-watchdog'"
+
+# 查看运行日志
+adb -s <device> shell "su -c 'tail -20 /data/data/com.termux/files/home/scripts/call_sms_forwarding.log'"
+
+# 查看看门狗日志
+adb -s <device> shell "su -c 'logcat -d -s Forward-Watchdog | tail -10'"
 
 # 查看数据库状态
-adb shell "su -c 'sqlite3 /data/data/com.termux/files/home/scripts/call_sms_forwarding_state.db \"SELECT * FROM forward_state;\"'"
+adb -s <device> shell "su -c 'sqlite3 /data/data/com.termux/files/home/scripts/call_sms_forwarding_state.db \"SELECT * FROM forward_state;\"'"
 ```
 
 ---
@@ -2400,19 +2038,32 @@ https://api.day.app/你的密钥/标题/内容？icon=图片 URL
 ### 常见问题
 
 **1. 服务无法启动**
-- 检查 Root 权限
-- 检查 Python 路径
-- 查看错误日志
+- 检查 Root 权限：`su -c "echo root_ok"`
+- 检查 Python 路径：`/data/data/com.termux/files/usr/bin/python3`
+- 查看运行日志：`tail -20 call_sms_forwarding.log`
 
-**2. 重复发送历史记录**
-- 检查状态数据库
-- 手动设置最新 ID：`UPDATE forward_state SET last_call_id = 26, last_sms_id = 12 WHERE id = 1;`
+**2. 服务挂掉不自动恢复**
+- 确认看门狗已部署和运行：`ps -A | grep forward-watchdog`
+- 启动看门狗：`nohup /system/bin/sh /data/adb/service.d/forward-watchdog.sh >/dev/null 2>&1 &`
+- 查看看门狗日志：`logcat -d -s Forward-Watchdog`
 
-**3. API Token 无效**
+**3. 四状态模型说明**
+- `http_call`: HTTP 转发未接来电（当前 401，Token 无效）
+- `http_sms`: HTTP 转发短信（当前 401，Token 无效）
+- `bark_call`: Bark 推送未接来电（正常）
+- `bark_sms`: Bark 推送短信（正常）
+- 四个维度独立记录 `last_id` 和 `last_ts`，互不干扰
+- 服务重启时执行 `compensate()` 补偿遗漏事件
+
+**4. 重复发送历史记录**
+- 检查状态数据库：`sqlite3 forward_state.db "SELECT * FROM forward_state;"`
+- 手动设置最新 ID（如需要）：`UPDATE forward_state SET bark_call_id = 最新ID WHERE id = 1;`
+
+**5. API Token 无效**
 - 确认 Token 格式正确
 - 检查服务器端配置
 
-**4. Bark 推送不生效**
+**6. Bark 推送不生效**
 - 检查 Bark URL
 - 确认 `BARK_ENABLED = True`
 - 检查网络连接
@@ -2707,5 +2358,5 @@ GET https://yqad.hxfssc.com:8088/api/posts/mobile/sms
 
 ---
 
-**文档更新时间**: 2026-06-28  
-**服务版本**: 2.0.0（整合短信&电话上报系统 + 服务端 API）
+**文档更新时间**: 2026-06-29  
+**服务版本**: 2.1.0（四状态模型 + 看门狗 + 启动补偿）
