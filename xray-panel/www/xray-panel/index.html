@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Xray 管理面板</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
+.login-container { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+.login-box { background: #16213e; padding: 2rem; border-radius: 12px; width: 320px; }
+.login-box h2 { text-align: center; margin-bottom: 1.5rem; color: #4fc3f7; }
+.login-box input { width: 100%; padding: 0.8rem; margin-bottom: 1rem; border: 1px solid #333; border-radius: 6px; background: #0f3460; color: #eee; font-size: 14px; }
+.login-box button { width: 100%; padding: 0.8rem; background: #4fc3f7; color: #1a1a2e; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; }
+.login-box button:hover { background: #81d4fa; }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 1rem; }
+.header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 0; border-bottom: 1px solid #333; margin-bottom: 1.5rem; }
+.header h1 { color: #4fc3f7; font-size: 1.5rem; }
+.header .actions { display: flex; gap: 0.5rem; }
+.btn { padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.btn-primary { background: #4fc3f7; color: #1a1a2e; }
+.btn-danger { background: #ef5350; color: #fff; }
+.btn-success { background: #66bb6a; color: #fff; }
+.btn-warning { background: #ffa726; color: #1a1a2e; }
+.btn:hover { opacity: 0.85; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.card { background: #16213e; border-radius: 10px; padding: 1.2rem; }
+.card h3 { color: #4fc3f7; margin-bottom: 0.8rem; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; }
+.stat { font-size: 1.8rem; font-weight: bold; }
+.stat-label { font-size: 0.8rem; color: #999; margin-top: 0.3rem; }
+.status-ok { color: #66bb6a; }
+.status-err { color: #ef5350; }
+
+.section { background: #16213e; border-radius: 10px; padding: 1.2rem; margin-bottom: 1.5rem; }
+.section h3 { color: #4fc3f7; margin-bottom: 1rem; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; }
+.section .toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+
+#config-editor { width: 100%; min-height: 400px; background: #0f3460; color: #eee; border: 1px solid #333; border-radius: 6px; padding: 1rem; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.5; resize: vertical; }
+#log-output { width: 100%; height: 300px; background: #0a0a0a; color: #0f0; border: 1px solid #333; border-radius: 6px; padding: 1rem; font-family: monospace; font-size: 12px; line-height: 1.4; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+
+.test-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.8rem; }
+.test-item { background: #0f3460; padding: 0.8rem; border-radius: 6px; }
+.test-item .name { font-size: 0.85rem; color: #999; }
+.test-item .result { font-size: 1rem; font-weight: bold; margin-top: 0.3rem; }
+
+.toast { position: fixed; top: 1rem; right: 1rem; padding: 0.8rem 1.5rem; border-radius: 6px; color: #fff; font-size: 14px; z-index: 9999; animation: slideIn 0.3s ease; }
+.toast-success { background: #66bb6a; }
+.toast-error { background: #ef5350; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.hidden { display: none !important; }
+.loading { opacity: 0.6; pointer-events: none; }
+
+.pwd-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333; }
+.pwd-section input { padding: 0.5rem; margin-right: 0.5rem; border: 1px solid #333; border-radius: 6px; background: #0f3460; color: #eee; font-size: 13px; width: 200px; }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-page" class="login-container">
+  <div class="login-box">
+    <h2>🛡️ Xray Panel</h2>
+    <input type="password" id="login-pwd" placeholder="输入管理密码" onkeypress="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()">登 录</button>
+  </div>
+</div>
+
+<!-- Main Panel -->
+<div id="main-page" class="container hidden">
+  <div class="header">
+    <h1>🛡️ Xray 管理面板</h1>
+    <div class="actions">
+      <button class="btn btn-success" onclick="refreshStatus()">刷新</button>
+      <button class="btn btn-warning" onclick="restartXray()">重启</button>
+      <button class="btn btn-danger" onclick="stopXray()">停止</button>
+      <button class="btn btn-primary" onclick="startXray()">启动</button>
+      <button class="btn" style="background:#555;color:#eee" onclick="doLogout()">退出</button>
+    </div>
+  </div>
+
+  <!-- Status Cards -->
+  <div class="grid" id="status-grid">
+    <div class="card"><h3>服务状态</h3><div class="stat" id="st-status">--</div><div class="stat-label" id="st-pid">PID: --</div></div>
+    <div class="card"><h3>运行时间</h3><div class="stat" id="st-uptime">--</div><div class="stat-label" id="st-system-uptime">系统: --</div></div>
+    <div class="card"><h3>内存使用</h3><div class="stat" id="st-mem">--</div><div class="stat-label" id="st-mem-detail">--</div></div>
+    <div class="card"><h3>连接数</h3><div class="stat" id="st-conn">--</div><div class="stat-label" id="st-tcp-detail">--</div></div>
+  </div>
+
+  <!-- Connectivity Test -->
+  <div class="section">
+    <h3>连通性测试</h3>
+    <div class="toolbar">
+      <button class="btn btn-primary" onclick="runTests()">运行测试</button>
+    </div>
+    <div class="test-results" id="test-results">
+      <div class="test-item"><div class="name">翻墙 (Google)</div><div class="result" id="test-google">未测试</div></div>
+      <div class="test-item"><div class="name">内网域名 (gitlab.hisense.com)</div><div class="result" id="test-office-domain">未测试</div></div>
+      <div class="test-item"><div class="name">内网 IP (172.16.43.111)</div><div class="result" id="test-office-ip">未测试</div></div>
+      <div class="test-item"><div class="name">国内 (Baidu)</div><div class="result" id="test-baidu">未测试</div></div>
+    </div>
+  </div>
+
+  <!-- Config Editor -->
+  <div class="section">
+    <h3>配置文件</h3>
+    <div class="toolbar">
+      <button class="btn btn-primary" onclick="loadConfig()">加载配置</button>
+      <button class="btn btn-success" onclick="saveConfig()">保存配置</button>
+      <button class="btn btn-warning" onclick="validateConfig()">验证语法</button>
+    </div>
+    <textarea id="config-editor" placeholder="点击「加载配置」查看当前配置..."></textarea>
+  </div>
+
+  <!-- Route Rules Editor -->
+  <div class="section">
+    <h3>路由规则（快速编辑）</h3>
+    <div class="toolbar">
+      <button class="btn btn-primary" onclick="loadRouteRules()">从配置加载</button>
+      <button class="btn btn-success" onclick="saveRouteRules()">保存到配置</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div>
+        <div style="font-size:13px;color:#4fc3f7;margin-bottom:0.5rem;">🏢 公司内网 (office)</div>
+        <div style="font-size:12px;color:#999;margin-bottom:0.3rem;">域名（每行一个）</div>
+        <textarea id="route-office-domains" style="width:100%;height:100px;background:#0f3460;color:#eee;border:1px solid #333;border-radius:6px;padding:0.5rem;font-family:monospace;font-size:12px;" placeholder="domain:hisense.com"></textarea>
+        <div style="font-size:12px;color:#999;margin:0.3rem 0;">IP 段（每行一个）</div>
+        <textarea id="route-office-ips" style="width:100%;height:100px;background:#0f3460;color:#eee;border:1px solid #333;border-radius:6px;padding:0.5rem;font-family:monospace;font-size:12px;" placeholder="10.19.0.0/16"></textarea>
+      </div>
+      <div>
+        <div style="font-size:13px;color:#66bb6a;margin-bottom:0.5rem;">🏠 直连 (direct)</div>
+        <div style="font-size:12px;color:#999;margin-bottom:0.3rem;">域名（每行一个）</div>
+        <textarea id="route-direct-domains" style="width:100%;height:100px;background:#0f3460;color:#eee;border:1px solid #333;border-radius:6px;padding:0.5rem;font-family:monospace;font-size:12px;" placeholder="geosite:cn"></textarea>
+        <div style="font-size:12px;color:#999;margin:0.3rem 0;">IP 段（每行一个）</div>
+        <textarea id="route-direct-ips" style="width:100%;height:100px;background:#0f3460;color:#eee;border:1px solid #333;border-radius:6px;padding:0.5rem;font-family:monospace;font-size:12px;" placeholder="geoip:cn"></textarea>
+      </div>
+    </div>
+    <div style="font-size:11px;color:#666;margin-top:0.5rem;">提示：修改后点「保存到配置」会更新配置文件（需重启生效）。域名格式如 domain:example.com，IP格式如 10.0.0.0/8</div>
+  </div>
+
+  <!-- Logs -->
+  <div class="section">
+    <h3>日志</h3>
+    <div class="toolbar">
+      <button class="btn btn-primary" onclick="loadLogs()">加载日志</button>
+      <button class="btn btn-danger" onclick="clearLogs()">清空</button>
+      <select id="log-filter" onchange="applyLogFilter()" style="padding:0.4rem 0.6rem;border:1px solid #333;border-radius:6px;background:#0f3460;color:#eee;font-size:13px;">
+        <option value="all">全部</option>
+        <option value="proxy">代理 (proxy)</option>
+        <option value="direct">直连 (direct)</option>
+        <option value="office">内网 (office)</option>
+        <option value="dns">DNS</option>
+        <option value="block">拦截 (block)</option>
+        <option value="error">错误/警告</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:0.4rem;margin-left:1rem;font-size:13px;cursor:pointer;">
+        <input type="checkbox" id="log-auto-refresh" onchange="toggleAutoRefresh()">
+        <span>实时刷新</span>
+        <span id="auto-refresh-indicator" style="display:none;width:8px;height:8px;background:#66bb6a;border-radius:50%;animation:pulse 1s infinite;"></span>
+      </label>
+    </div>
+    <div id="log-output">点击「加载日志」查看...</div>
+  </div>
+
+  <!-- GeoData Update -->
+  <div class="section">
+    <h3>规则库更新 (GeoIP / GeoSite)</h3>
+    <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin-bottom:1rem;">
+      <div style="font-size:13px;color:#ccc;">
+        <span>GeoIP: </span><span id="geo-ip-info">--</span>
+        <span style="margin-left:1rem;">GeoSite: </span><span id="geo-site-info">--</span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button class="btn btn-primary" onclick="updateGeodata()">立即更新</button>
+      <button class="btn btn-success" onclick="loadGeodataStatus()">刷新状态</button>
+    </div>
+    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid #333;">
+      <div style="font-size:13px;color:#999;margin-bottom:0.5rem;">定时更新计划</div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+        <input id="geo-cron-min" style="width:50px;padding:0.4rem;border:1px solid #333;border-radius:6px;background:#0f3460;color:#eee;font-size:13px;text-align:center;" placeholder="分" title="分钟 (0-59)">
+        <input id="geo-cron-hour" style="width:50px;padding:0.4rem;border:1px solid #333;border-radius:6px;background:#0f3460;color:#eee;font-size:13px;text-align:center;" placeholder="时" title="小时 (0-23)">
+        <input id="geo-cron-day" style="width:50px;padding:0.4rem;border:1px solid #333;border-radius:6px;background:#0f3460;color:#eee;font-size:13px;text-align:center;" placeholder="日" title="日 (1-31 或 *)">
+        <input id="geo-cron-month" style="width:50px;padding:0.4rem;border:1px solid #333;border-radius:6px;background:#0f3460;color:#eee;font-size:13px;text-align:center;" placeholder="月" title="月 (1-12 或 *)">
+        <input id="geo-cron-week" style="width:50px;padding:0.4rem;border:1px solid #333;border-radius:6px;background:#0f3460;color:#eee;font-size:13px;text-align:center;" placeholder="周" title="星期 (0-6, 0=周日 或 *)">
+        <button class="btn btn-warning" onclick="saveGeoSchedule()">保存</button>
+        <button class="btn btn-danger" onclick="disableGeoSchedule()">禁用</button>
+      </div>
+      <div style="font-size:11px;color:#666;margin-top:0.4rem;">格式: 分(0-59) 时(0-23) 日(1-31) 月(1-12) 周(0-6,0=周日)　|　示例: 0 4 * * 1 = 每周一凌晨4:00</div>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap;">
+        <button class="btn" style="background:#333;color:#ccc;font-size:11px;" onclick="setPresetCron('0','4','*','*','1')">每周一 4:00</button>
+        <button class="btn" style="background:#333;color:#ccc;font-size:11px;" onclick="setPresetCron('0','4','*','*','*')">每天 4:00</button>
+        <button class="btn" style="background:#333;color:#ccc;font-size:11px;" onclick="setPresetCron('0','3','1','*','*')">每月1号 3:00</button>
+        <button class="btn" style="background:#333;color:#ccc;font-size:11px;" onclick="setPresetCron('30','2','*/3','*','*')">每3天 2:30</button>
+      </div>
+      <div id="geo-schedule-status" style="font-size:12px;color:#4fc3f7;margin-top:0.5rem;"></div>
+    </div>
+    <div id="geo-update-log" style="margin-top:1rem;font-family:monospace;font-size:12px;color:#ccc;white-space:pre-wrap;max-height:100px;overflow-y:auto;"></div>
+  </div>
+
+  <!-- System Info -->
+  <div class="section">
+    <h3>系统信息</h3>
+    <div id="system-info" style="font-family:monospace; font-size:13px; white-space:pre-wrap; color:#ccc;">点击顶部「刷新」加载...</div>
+  </div>
+
+  <!-- Password Change -->
+  <div class="section">
+    <h3>修改面板密码</h3>
+    <div class="pwd-section">
+      <input type="password" id="new-pwd" placeholder="新密码">
+      <input type="password" id="new-pwd2" placeholder="确认新密码">
+      <button class="btn btn-warning" onclick="changePassword()">修改密码</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/cgi-bin/xray-api';
+let token = localStorage.getItem('xray_token') || '';
+let logAutoRefreshTimer = null;
+
+// 格式化为中国时间 (UTC+8)
+function formatCNTime(dateStr) {
+  if (!dateStr || dateStr === '--' || dateStr === 'N/A') return dateStr;
+  // Try to parse "Jul 2 08:59" format (from ls -ld /proc/PID)
+  const now = new Date();
+  const match = dateStr.match(/(\w+)\s+(\d+)\s+(\d+):(\d+)/);
+  if (match) {
+    const months = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+    const mon = months[match[1]] !== undefined ? months[match[1]] : now.getMonth();
+    const day = parseInt(match[2]);
+    const hour = parseInt(match[3]);
+    const min = parseInt(match[4]);
+    const d = new Date(now.getFullYear(), mon, day, hour, min);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+  return dateStr;
+}
+
+function getNowCN() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+
+// Convert xray UTC timestamps in logs to Beijing time (UTC+8)
+// Matches patterns like: 2026/07/02 02:10:53.510988
+function convertLogTimesToCST(text) {
+  return text.replace(/(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d+)/g,
+    function(match, y, m, d, h, min, s, ms) {
+      const utc = new Date(Date.UTC(+y, +m-1, +d, +h, +min, +s));
+      const cst = new Date(utc.getTime() + 8*3600000);
+      return `${cst.getUTCFullYear()}/${String(cst.getUTCMonth()+1).padStart(2,'0')}/${String(cst.getUTCDate()).padStart(2,'0')} ${String(cst.getUTCHours()).padStart(2,'0')}:${String(cst.getUTCMinutes()).padStart(2,'0')}:${String(cst.getUTCSeconds()).padStart(2,'0')}.${ms}`;
+    }
+  );
+}
+
+function toast(msg, type='success') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+async function api(action, data={}) {
+  try {
+    const payload = JSON.stringify({ action, token, ...data });
+    const res = await fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': new Blob([payload]).size.toString() },
+      body: payload
+    });
+    const text = await res.text();
+    try { return JSON.parse(text); } catch(e) { return { error: '响应解析失败: ' + text.substring(0, 100) }; }
+  } catch(e) {
+    return { error: e.message };
+  }
+}
+
+async function doLogin() {
+  const pwd = document.getElementById('login-pwd').value;
+  const res = await api('login', { password: pwd });
+  if (res.token) {
+    token = res.token;
+    localStorage.setItem('xray_token', token);
+    document.getElementById('login-page').classList.add('hidden');
+    document.getElementById('main-page').classList.remove('hidden');
+    refreshStatus();
+  } else {
+    toast(res.error || '密码错误', 'error');
+  }
+}
+
+function doLogout() {
+  token = '';
+  localStorage.removeItem('xray_token');
+  document.getElementById('main-page').classList.add('hidden');
+  document.getElementById('login-page').classList.remove('hidden');
+  stopAutoRefresh();
+}
+
+async function checkSession() {
+  if (!token) return;
+  const res = await api('status');
+  if (res.error === 'unauthorized') {
+    doLogout();
+  } else {
+    document.getElementById('login-page').classList.add('hidden');
+    document.getElementById('main-page').classList.remove('hidden');
+    updateStatus(res);
+    loadGeodataStatus();
+  }
+}
+
+function updateStatus(res) {
+  if (res.error) return;
+  const st = document.getElementById('st-status');
+  st.textContent = res.running ? '运行中' : '已停止';
+  st.className = 'stat ' + (res.running ? 'status-ok' : 'status-err');
+  document.getElementById('st-pid').textContent = 'PID: ' + (res.pid || '--');
+  document.getElementById('st-uptime').textContent = formatCNTime(res.proc_uptime);
+  document.getElementById('st-system-uptime').textContent = '系统: ' + (res.system_uptime || '--');
+  document.getElementById('st-mem').textContent = res.mem_used || '--';
+  document.getElementById('st-mem-detail').textContent = `总: ${res.mem_total || '--'} / 可用: ${res.mem_free || '--'}`;
+  document.getElementById('st-conn').textContent = res.connections || '--';
+  // 将 TCP 原始信息转为可读格式
+  const tcpRaw = res.tcp_info || '';
+  let tcpDisplay = '';
+  const tcpMatch = tcpRaw.match(/inuse (\d+).*orphan (\d+).*tw (\d+)/);
+  if (tcpMatch) {
+    tcpDisplay = `活跃 ${tcpMatch[1]} / 等待关闭 ${tcpMatch[3]}`;
+  }
+  document.getElementById('st-tcp-detail').textContent = tcpDisplay;
+  // 格式化系统信息：去掉原始 uptime 行，把负载改为可读格式
+  let sysInfo = res.system_info || '';
+  // 去掉最后的 uptime 原始行 (如 "10:21:42 up 2 days, 23:46, load average: 0.06, 0.12, 0.16")
+  sysInfo = sysInfo.replace(/\n\n\s*\d+:\d+:\d+\s+up.*$/m, '');
+  // 把 "负载: 0.06 0.13 0.16" 改为更可读的格式
+  sysInfo = sysInfo.replace(/负载: ([\d.]+) ([\d.]+) ([\d.]+)/, '负载: $1 (1分钟) / $2 (5分钟) / $3 (15分钟)');
+  sysInfo += '\n\n更新时间: ' + getNowCN();
+  document.getElementById('system-info').textContent = sysInfo;
+}
+
+async function refreshStatus() {
+  const res = await api('status');
+  if (res.error === 'unauthorized') { doLogout(); return; }
+  updateStatus(res);
+  toast('已刷新');
+}
+
+async function restartXray() {
+  const res = await api('restart');
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+  setTimeout(refreshStatus, 2000);
+}
+async function stopXray() {
+  const res = await api('stop');
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+  setTimeout(refreshStatus, 1000);
+}
+async function startXray() {
+  const res = await api('start');
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+  setTimeout(refreshStatus, 2000);
+}
+
+async function runTests() {
+  ['test-google','test-office-domain','test-office-ip','test-baidu'].forEach(id => {
+    document.getElementById(id).textContent = '测试中...';
+    document.getElementById(id).style.color = '#999';
+  });
+  const res = await api('test');
+  if (res.error) { toast(res.error, 'error'); return; }
+  for (const [id, r] of Object.entries(res.results || {})) {
+    const el = document.getElementById(id);
+    if (r.ok) {
+      el.textContent = `✓ ${r.code} (${r.time})`;
+      el.style.color = '#66bb6a';
+    } else {
+      el.textContent = `✗ ${r.code || '失败'} (${r.time || '--'})`;
+      el.style.color = '#ef5350';
+    }
+  }
+}
+
+async function loadConfig() {
+  const res = await api('config_get');
+  if (res.error) { toast(res.error, 'error'); return; }
+  const config = res.config_b64 ? atob(res.config_b64) : (res.config || '');
+  document.getElementById('config-editor').value = config;
+}
+async function saveConfig() {
+  const raw = document.getElementById('config-editor').value;
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch(e) { toast('JSON 格式无效: ' + e.message, 'error'); return; }
+  // 格式化后回写到编辑器
+  const formatted = JSON.stringify(parsed, null, 2);
+  document.getElementById('config-editor').value = formatted;
+  const config_b64 = btoa(unescape(encodeURIComponent(formatted)));
+  const res = await api('config_save', { config_b64 });
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+}
+async function validateConfig() {
+  const res = await api('config_validate');
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+}
+
+// === Route Rules Quick Editor ===
+function loadRouteRules() {
+  const configText = document.getElementById('config-editor').value;
+  if (!configText) { toast('请先加载配置文件', 'error'); return; }
+  let cfg;
+  try { cfg = JSON.parse(configText); } catch(e) { toast('配置JSON无效，请先加载配置', 'error'); return; }
+
+  const rules = cfg.routing && cfg.routing.rules || [];
+  let officeDomains = [], officeIps = [], directDomains = [], directIps = [];
+
+  for (const rule of rules) {
+    if (rule.outboundTag === 'office') {
+      if (rule.domain) officeDomains = officeDomains.concat(rule.domain);
+      if (rule.ip) officeIps = officeIps.concat(rule.ip);
+    }
+    if (rule.outboundTag === 'direct') {
+      if (rule.domain) directDomains = directDomains.concat(rule.domain);
+      if (rule.ip) directIps = directIps.concat(rule.ip);
+    }
+  }
+
+  document.getElementById('route-office-domains').value = officeDomains.join('\n');
+  document.getElementById('route-office-ips').value = officeIps.join('\n');
+  document.getElementById('route-direct-domains').value = directDomains.join('\n');
+  document.getElementById('route-direct-ips').value = directIps.join('\n');
+  toast('已从配置中加载路由规则');
+}
+
+function saveRouteRules() {
+  const configText = document.getElementById('config-editor').value;
+  if (!configText) { toast('请先加载配置文件', 'error'); return; }
+  let cfg;
+  try { cfg = JSON.parse(configText); } catch(e) { toast('配置JSON无效', 'error'); return; }
+
+  const officeDomains = document.getElementById('route-office-domains').value.trim().split('\n').filter(s => s.trim());
+  const officeIps = document.getElementById('route-office-ips').value.trim().split('\n').filter(s => s.trim());
+  const directDomains = document.getElementById('route-direct-domains').value.trim().split('\n').filter(s => s.trim());
+  const directIps = document.getElementById('route-direct-ips').value.trim().split('\n').filter(s => s.trim());
+
+  if (!cfg.routing || !cfg.routing.rules) { toast('配置中缺少routing.rules', 'error'); return; }
+
+  // Update existing rules: find office/direct rules and replace their domain/ip arrays
+  let officeDomainsSet = false, officeIpsSet = false;
+  let directDomainsSet = false, directIpsSet = false;
+
+  for (const rule of cfg.routing.rules) {
+    if (rule.outboundTag === 'office') {
+      if (rule.domain && !officeDomainsSet) { rule.domain = officeDomains; officeDomainsSet = true; }
+      else if (rule.ip && !officeIpsSet) { rule.ip = officeIps; officeIpsSet = true; }
+    }
+    if (rule.outboundTag === 'direct') {
+      if (rule.domain && !directDomainsSet) { rule.domain = directDomains; directDomainsSet = true; }
+      else if (rule.ip && !directIpsSet) { rule.ip = directIps; directIpsSet = true; }
+    }
+  }
+
+  // Also update fakedns domains to match office domains
+  if (cfg.dns && cfg.dns.servers) {
+    for (const srv of cfg.dns.servers) {
+      if (srv && srv.address === 'fakedns') {
+        srv.domains = officeDomains.filter(d => d.startsWith('domain:'));
+      }
+    }
+  }
+
+  const formatted = JSON.stringify(cfg, null, 2);
+  document.getElementById('config-editor').value = formatted;
+  toast('路由规则已更新到配置（点击上方「保存配置」写入路由器）');
+}
+
+let logRawContent = '';
+
+async function loadLogs() {
+  const res = await api('logs');
+  if (res.error) { toast(res.error, 'error'); return; }
+  logRawContent = res.logs_b64 ? atob(res.logs_b64) : (res.logs || '');
+  applyLogFilter();
+}
+function clearLogs() {
+  logRawContent = '';
+  document.getElementById('log-output').textContent = '';
+}
+
+function applyLogFilter() {
+  const filter = document.getElementById('log-filter').value;
+  const lines = logRawContent.split('\n');
+  let filtered;
+  switch(filter) {
+    case 'proxy':
+      filtered = lines.filter(l => /-> proxy\]|-> dmtoutbound\]|outboundTag.*proxy/i.test(l));
+      break;
+    case 'direct':
+      filtered = lines.filter(l => /-> direct\]/i.test(l));
+      break;
+    case 'office':
+      filtered = lines.filter(l => /-> office\]|-> officeoutbound\]|hisense|10\.19\.|172\.16\.|10\.30\.|10\.33\.|10\.16\./i.test(l));
+      break;
+    case 'dns':
+      filtered = lines.filter(l => /dns|5353|dns-in|dns-out/i.test(l));
+      break;
+    case 'block':
+      filtered = lines.filter(l => /-> block\]|-> reject\]/i.test(l));
+      break;
+    case 'error':
+      filtered = lines.filter(l => /error|warning|fail|refused|timeout/i.test(l));
+      break;
+    default:
+      filtered = lines;
+  }
+  const text = filtered.join('\n');
+  const el = document.getElementById('log-output');
+  el.textContent = convertLogTimesToCST(text);
+  el.scrollTop = el.scrollHeight;
+}
+
+function toggleAutoRefresh() {
+  const checked = document.getElementById('log-auto-refresh').checked;
+  const indicator = document.getElementById('auto-refresh-indicator');
+  if (checked) {
+    indicator.style.display = 'inline-block';
+    loadLogs(); // immediate first load
+    logAutoRefreshTimer = setInterval(async () => {
+      const res = await api('logs');
+      if (res.error === 'unauthorized') { stopAutoRefresh(); doLogout(); return; }
+      if (res.error) return;
+      logRawContent = res.logs_b64 ? atob(res.logs_b64) : (res.logs || '');
+      applyLogFilter();
+    }, 3000);
+  } else {
+    stopAutoRefresh();
+  }
+}
+
+function stopAutoRefresh() {
+  if (logAutoRefreshTimer) {
+    clearInterval(logAutoRefreshTimer);
+    logAutoRefreshTimer = null;
+  }
+  const cb = document.getElementById('log-auto-refresh');
+  if (cb) cb.checked = false;
+  const indicator = document.getElementById('auto-refresh-indicator');
+  if (indicator) indicator.style.display = 'none';
+}
+
+// === GeoData ===
+async function loadGeodataStatus() {
+  const res = await api('geodata_status');
+  if (res.error) { toast(res.error, 'error'); return; }
+  document.getElementById('geo-ip-info').textContent = res.geoip || '--';
+  document.getElementById('geo-site-info').textContent = res.geosite || '--';
+  document.getElementById('geo-update-log').textContent = res.update_log || '';
+  // Parse current schedule into fields
+  const schedule = (res.schedule || '').trim();
+  if (schedule) {
+    const parts = schedule.split(/\s+/);
+    if (parts.length >= 5) {
+      document.getElementById('geo-cron-min').value = parts[0];
+      document.getElementById('geo-cron-hour').value = parts[1];
+      document.getElementById('geo-cron-day').value = parts[2];
+      document.getElementById('geo-cron-month').value = parts[3];
+      document.getElementById('geo-cron-week').value = parts[4];
+    }
+    document.getElementById('geo-schedule-status').textContent = '当前计划: ' + schedule + ' (' + describeCron(parts) + ')';
+  } else {
+    document.getElementById('geo-schedule-status').textContent = '当前: 未设置定时任务';
+  }
+}
+
+function describeCron(parts) {
+  if (!parts || parts.length < 5) return '';
+  const [min, hour, day, month, week] = parts;
+  const weekNames = ['周日','周一','周二','周三','周四','周五','周六'];
+  if (day === '*' && month === '*' && week === '*') return `每天 ${hour}:${min.padStart(2,'0')}`;
+  if (day === '*' && month === '*' && week !== '*') return `每${weekNames[+week] || '周'+week} ${hour}:${min.padStart(2,'0')}`;
+  if (week === '*' && month === '*' && day !== '*') return `每月${day}号 ${hour}:${min.padStart(2,'0')}`;
+  return `${min} ${hour} ${day} ${month} ${week}`;
+}
+
+function setPresetCron(min, hour, day, month, week) {
+  document.getElementById('geo-cron-min').value = min;
+  document.getElementById('geo-cron-hour').value = hour;
+  document.getElementById('geo-cron-day').value = day;
+  document.getElementById('geo-cron-month').value = month;
+  document.getElementById('geo-cron-week').value = week;
+}
+
+async function updateGeodata() {
+  toast('正在更新规则库，可能需要1-2分钟...');
+  const res = await api('geodata_update');
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+  if (!res.error) loadGeodataStatus();
+}
+
+async function saveGeoSchedule() {
+  const min = document.getElementById('geo-cron-min').value.trim();
+  const hour = document.getElementById('geo-cron-hour').value.trim();
+  const day = document.getElementById('geo-cron-day').value.trim() || '*';
+  const month = document.getElementById('geo-cron-month').value.trim() || '*';
+  const week = document.getElementById('geo-cron-week').value.trim() || '*';
+  if (!min || !hour) { toast('请至少填写 分 和 时', 'error'); return; }
+  const schedule = `${min} ${hour} ${day} ${month} ${week}`;
+  const res = await api('geodata_schedule', { schedule });
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+  if (!res.error) loadGeodataStatus();
+}
+
+async function disableGeoSchedule() {
+  const res = await api('geodata_schedule', { schedule: '' });
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+  if (!res.error) {
+    ['geo-cron-min','geo-cron-hour','geo-cron-day','geo-cron-month','geo-cron-week'].forEach(id => document.getElementById(id).value = '');
+    loadGeodataStatus();
+  }
+}
+
+async function changePassword() {
+  const p1 = document.getElementById('new-pwd').value;
+  const p2 = document.getElementById('new-pwd2').value;
+  if (!p1 || p1 !== p2) { toast('两次密码不一致', 'error'); return; }
+  const res = await api('change_password', { new_password: p1 });
+  toast(res.message || res.error, res.error ? 'error' : 'success');
+  document.getElementById('new-pwd').value = '';
+  document.getElementById('new-pwd2').value = '';
+}
+
+// Init
+checkSession();
+</script>
+</body>
+</html>
