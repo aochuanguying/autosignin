@@ -74,7 +74,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <div class="header">
     <h1>🛡️ Xray 管理面板</h1>
     <div class="actions">
-      <button class="btn btn-success" onclick="refreshStatus()">刷新</button>
+      <button id="btn-refresh" class="btn btn-success" onclick="refreshStatus()">刷新</button>
       <button class="btn btn-warning" onclick="restartXray()">重启</button>
       <button class="btn btn-danger" onclick="stopXray()">停止</button>
       <button class="btn btn-primary" onclick="startXray()">启动</button>
@@ -222,6 +222,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 const API = '/cgi-bin/xray-api';
 let token = localStorage.getItem('xray_token') || '';
 let logAutoRefreshTimer = null;
+let autoInitRunning = false;
 
 // 格式化为中国时间 (UTC+8)
 function formatCNTime(dateStr) {
@@ -266,18 +267,146 @@ function toast(msg, type='success') {
   setTimeout(() => el.remove(), 3000);
 }
 
-async function api(action, data={}) {
+function setRefreshButtonDisabled(disabled) {
+  const btn = document.getElementById('btn-refresh');
+  if (btn) {
+    btn.disabled = disabled;
+    btn.style.opacity = disabled ? '0.5' : '1';
+    btn.style.pointerEvents = disabled ? 'none' : 'auto';
+  }
+}
+
+async function api(action, data={}, signal) {
   try {
     const payload = JSON.stringify({ action, token, ...data });
-    const res = await fetch(API, {
+    const opts = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': new Blob([payload]).size.toString() },
       body: payload
-    });
+    };
+    if (signal) {
+      opts.signal = signal;
+    }
+    const res = await fetch(API, opts);
     const text = await res.text();
     try { return JSON.parse(text); } catch(e) { return { error: '响应解析失败: ' + text.substring(0, 100) }; }
   } catch(e) {
     return { error: e.message };
+  }
+}
+
+async function apiWithTimeout(action, data = {}, timeout = 30000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const result = await api(action, data, controller.signal);
+    if (result.error && result.error.toLowerCase().includes('abort')) {
+      return { error: '请求超时' };
+    }
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runTestsSafe() {
+  try {
+    ['test-google','test-office-domain','test-office-ip','test-baidu'].forEach(id => {
+      document.getElementById(id).textContent = '测试中...';
+      document.getElementById(id).style.color = '#999';
+    });
+    const res = await apiWithTimeout('test');
+    if (res.error === 'unauthorized') { return { success: false, unauthorized: true }; }
+    if (res.error) {
+      ['test-google','test-office-domain','test-office-ip','test-baidu'].forEach(id => {
+        document.getElementById(id).textContent = '✗ ' + (res.error === '请求超时' ? '超时' : '失败');
+        document.getElementById(id).style.color = '#ef5350';
+      });
+      return { success: false };
+    }
+    for (const [id, r] of Object.entries(res.results || {})) {
+      const el = document.getElementById(id);
+      if (r.ok) {
+        el.textContent = `✓ ${r.code} (${r.time})`;
+        el.style.color = '#66bb6a';
+      } else {
+        el.textContent = `✗ ${r.code || '失败'} (${r.time || '--'})`;
+        el.style.color = '#ef5350';
+      }
+    }
+    return { success: true };
+  } catch (e) {
+    ['test-google','test-office-domain','test-office-ip','test-baidu'].forEach(id => {
+      document.getElementById(id).textContent = '✗ 失败';
+      document.getElementById(id).style.color = '#ef5350';
+    });
+    return { success: false };
+  }
+}
+
+async function loadConfigSafe() {
+  try {
+    const res = await apiWithTimeout('config_get');
+    if (res.error === 'unauthorized') { return { success: false, unauthorized: true }; }
+    if (res.error) { toast(res.error, 'error'); return { success: false }; }
+    const config = res.config_b64 ? atob(res.config_b64) : (res.config || '');
+    document.getElementById('config-editor').value = config;
+    return { success: true };
+  } catch (e) {
+    toast(e.message || '配置加载失败', 'error');
+    return { success: false };
+  }
+}
+
+async function loadRouteRulesSafe() {
+  try {
+    const configText = document.getElementById('config-editor').value;
+    if (!configText) { return { success: false }; }
+    let cfg;
+    try { cfg = JSON.parse(configText); } catch (e) { toast('路由规则解析失败', 'error'); return { success: false }; }
+    const rules = cfg.routing && cfg.routing.rules;
+    if (!rules) { toast('路由规则解析失败', 'error'); return { success: false }; }
+    let officeDomains = [], officeIps = [], directDomains = [], directIps = [];
+    for (const rule of rules) {
+      if (rule.outboundTag === 'office') {
+        if (rule.domain) officeDomains = officeDomains.concat(rule.domain);
+        if (rule.ip) officeIps = officeIps.concat(rule.ip);
+      }
+      if (rule.outboundTag === 'direct') {
+        if (rule.domain) directDomains = directDomains.concat(rule.domain);
+        if (rule.ip) directIps = directIps.concat(rule.ip);
+      }
+    }
+    document.getElementById('route-office-domains').value = officeDomains.join('\n');
+    document.getElementById('route-office-ips').value = officeIps.join('\n');
+    document.getElementById('route-direct-domains').value = directDomains.join('\n');
+    document.getElementById('route-direct-ips').value = directIps.join('\n');
+    return { success: true };
+  } catch (e) {
+    toast('路由规则解析失败', 'error');
+    return { success: false };
+  }
+}
+
+async function autoInit() {
+  if (autoInitRunning) return;
+  autoInitRunning = true;
+  setRefreshButtonDisabled(true);
+
+  try {
+    // 串行执行以避免后端 CGI 并发竞态（单 token 文件读写冲突）
+    // 先执行配置加载（快速），再执行连通性测试（慢）
+    const configResult = await loadConfigSafe();
+    if (configResult.unauthorized) { doLogout(); return; }
+    if (configResult.success) {
+      await loadRouteRulesSafe();
+    }
+
+    const testResult = await runTestsSafe();
+    if (testResult.unauthorized) { doLogout(); return; }
+  } finally {
+    autoInitRunning = false;
+    setRefreshButtonDisabled(false);
   }
 }
 
@@ -289,7 +418,7 @@ async function doLogin() {
     localStorage.setItem('xray_token', token);
     document.getElementById('login-page').classList.add('hidden');
     document.getElementById('main-page').classList.remove('hidden');
-    refreshStatus();
+    autoInit();
   } else {
     toast(res.error || '密码错误', 'error');
   }
@@ -308,11 +437,17 @@ async function checkSession() {
   const res = await api('status');
   if (res.error === 'unauthorized') {
     doLogout();
+  } else if (res.error) {
+    // 网络错误等非认证错误，不退出登录，但也不加载数据
+    // 保持在面板页面，用户可以手动点刷新
+    document.getElementById('login-page').classList.add('hidden');
+    document.getElementById('main-page').classList.remove('hidden');
   } else {
     document.getElementById('login-page').classList.add('hidden');
     document.getElementById('main-page').classList.remove('hidden');
     updateStatus(res);
     loadGeodataStatus();
+    autoInit();
   }
 }
 
@@ -348,7 +483,8 @@ function updateStatus(res) {
 async function refreshStatus() {
   const res = await api('status');
   if (res.error === 'unauthorized') { doLogout(); return; }
-  updateStatus(res);
+  if (!res.error) { updateStatus(res); }
+  await autoInit();
   toast('已刷新');
 }
 
