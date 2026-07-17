@@ -203,6 +203,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
   <!-- System Info -->
   <div class="section">
+    <h3>公司内网 IP 段管理</h3>
+    <div style="font-size:12px;color:#999;margin-bottom:0.8rem;">编辑后点保存，nftables 立即热更新（不断网），xray config 同步修改（需重启生效）。</div>
+    <div class="toolbar">
+      <button class="btn btn-primary" onclick="loadOfficeNets()">加载当前配置</button>
+      <button class="btn btn-success" onclick="saveOfficeNets()">保存并应用</button>
+    </div>
+    <textarea id="office-nets-editor" style="width:100%;height:150px;background:#0f3460;color:#eee;border:1px solid #333;border-radius:6px;padding:0.8rem;font-family:monospace;font-size:13px;line-height:1.6;resize:vertical;" placeholder="每行一个 CIDR 网段，例如：&#10;10.19.0.0/16&#10;172.16.0.0/16"></textarea>
+  </div>
+
+  <!-- System Info -->
+  <div class="section">
     <h3>系统信息</h3>
     <div id="system-info" style="font-family:monospace; font-size:13px; white-space:pre-wrap; color:#ccc;">点击顶部「刷新」加载...</div>
   </div>
@@ -247,16 +258,9 @@ function getNowCN() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
 }
 
-// Convert xray UTC timestamps in logs to Beijing time (UTC+8)
-// Matches patterns like: 2026/07/02 02:10:53.510988
+// Xray logs already use system timezone (CST/Beijing time), no conversion needed
 function convertLogTimesToCST(text) {
-  return text.replace(/(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d+)/g,
-    function(match, y, m, d, h, min, s, ms) {
-      const utc = new Date(Date.UTC(+y, +m-1, +d, +h, +min, +s));
-      const cst = new Date(utc.getTime() + 8*3600000);
-      return `${cst.getUTCFullYear()}/${String(cst.getUTCMonth()+1).padStart(2,'0')}/${String(cst.getUTCDate()).padStart(2,'0')} ${String(cst.getUTCHours()).padStart(2,'0')}:${String(cst.getUTCMinutes()).padStart(2,'0')}:${String(cst.getUTCSeconds()).padStart(2,'0')}.${ms}`;
-    }
-  );
+  return text;
 }
 
 function toast(msg, type='success') {
@@ -447,6 +451,7 @@ async function checkSession() {
     document.getElementById('main-page').classList.remove('hidden');
     updateStatus(res);
     loadGeodataStatus();
+    loadOfficeNets();
     autoInit();
   }
 }
@@ -539,6 +544,12 @@ async function saveConfig() {
   const config_b64 = btoa(unescape(encodeURIComponent(formatted)));
   const res = await api('config_save', { config_b64 });
   toast(res.message || res.error, res.error ? 'error' : 'success');
+  // Auto-validate after successful save
+  if (!res.error) {
+    const vRes = await api('config_validate');
+    if (vRes.message) toast(vRes.message, 'success');
+    else if (vRes.error) toast(vRes.error, 'error');
+  }
 }
 async function validateConfig() {
   const res = await api('config_validate');
@@ -598,15 +609,6 @@ function saveRouteRules() {
     if (rule.outboundTag === 'direct') {
       if (rule.domain && !directDomainsSet) { rule.domain = directDomains; directDomainsSet = true; }
       else if (rule.ip && !directIpsSet) { rule.ip = directIps; directIpsSet = true; }
-    }
-  }
-
-  // Also update fakedns domains to match office domains
-  if (cfg.dns && cfg.dns.servers) {
-    for (const srv of cfg.dns.servers) {
-      if (srv && srv.address === 'fakedns') {
-        srv.domains = officeDomains.filter(d => d.startsWith('domain:'));
-      }
     }
   }
 
@@ -732,10 +734,26 @@ function setPresetCron(min, hour, day, month, week) {
 }
 
 async function updateGeodata() {
-  toast('正在更新规则库，可能需要1-2分钟...');
+  toast('正在更新规则库，后台执行中...');
   const res = await api('geodata_update');
   toast(res.message || res.error, res.error ? 'error' : 'success');
-  if (!res.error) loadGeodataStatus();
+  if (!res.error) {
+    // Poll for completion
+    const pollInterval = setInterval(async () => {
+      const status = await api('geodata_update_status');
+      if (status.status === 'done') {
+        clearInterval(pollInterval);
+        toast(status.message, 'success');
+        loadGeodataStatus();
+      } else if (status.status === 'error') {
+        clearInterval(pollInterval);
+        toast(status.message, 'error');
+      }
+      // status === 'running': continue polling
+    }, 5000);
+    // Stop polling after 3 minutes max
+    setTimeout(() => clearInterval(pollInterval), 180000);
+  }
 }
 
 async function saveGeoSchedule() {
@@ -768,6 +786,28 @@ async function changePassword() {
   toast(res.message || res.error, res.error ? 'error' : 'success');
   document.getElementById('new-pwd').value = '';
   document.getElementById('new-pwd2').value = '';
+}
+
+// === Office Nets ===
+async function loadOfficeNets() {
+  const res = await api('office_nets_get');
+  if (res.error) { toast(res.error, 'error'); return; }
+  const nets = res.networks || [];
+  document.getElementById('office-nets-editor').value = nets.join('\n');
+  toast('已加载 ' + nets.length + ' 个网段', 'success');
+}
+
+async function saveOfficeNets() {
+  const text = document.getElementById('office-nets-editor').value.trim();
+  if (!text) { toast('内容不能为空', 'error'); return; }
+  const networks = text.split('\n').map(s => s.trim()).filter(s => s && !s.startsWith('#'));
+  // Basic CIDR validation
+  const cidrRe = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/;
+  for (const n of networks) {
+    if (!cidrRe.test(n)) { toast('格式错误: ' + n + ' (应为 x.x.x.x/xx)', 'error'); return; }
+  }
+  const res = await api('office_nets_save', { networks });
+  toast(res.message || res.error, res.error ? 'error' : 'success');
 }
 
 // Init

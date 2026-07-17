@@ -1,6 +1,5 @@
 #!/bin/sh
-# Xray Management Panel API - CGI for uhttpd
-
+# Xray Management Panel API - CGI for Debian (nginx + fcgiwrap)
 XRAY_CONF="/usr/local/xray/config.json"
 XRAY_BIN="/usr/local/xray/xray"
 XRAY_DIR="/usr/local/xray"
@@ -10,14 +9,14 @@ DEFAULT_PWD="admin"
 
 # Read POST body
 if [ "$REQUEST_METHOD" = "POST" ] && [ -n "$CONTENT_LENGTH" ]; then
-    read -n "$CONTENT_LENGTH" BODY
+    BODY=$(dd bs=1 count="$CONTENT_LENGTH" 2>/dev/null)
 else
     BODY=""
 fi
 
 # JSON response
 json_resp() {
-    printf "Status: 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n%s" "$1"
+    printf "Status: 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\n\r\n%s" "$1"
 }
 
 # CORS preflight
@@ -26,19 +25,17 @@ if [ "$REQUEST_METHOD" = "OPTIONS" ]; then
     exit 0
 fi
 
-# Parse request fields using lua
-echo "$BODY" > /tmp/.xray_panel_req
-PARSED=$(lua -e 'local j=require("luci.jsonc"); local f=io.open("/tmp/.xray_panel_req","r"); local d=j.parse(f:read("*a")); f:close(); if d then io.write(string.format("ACTION=%q TOKEN=%q PASSWORD=%q NEW_PASSWORD=%q", d.action or "", d.token or "", d.password or "", d.new_password or "")) else io.write("ACTION=\"\" TOKEN=\"\" PASSWORD=\"\" NEW_PASSWORD=\"\"") end')
-eval $PARSED
-rm -f /tmp/.xray_panel_req
+# Parse request fields using jq
+ACTION=$(echo "$BODY" | jq -r '.action // empty' 2>/dev/null)
+TOKEN=$(echo "$BODY" | jq -r '.token // empty' 2>/dev/null)
+PASSWORD=$(echo "$BODY" | jq -r '.password // empty' 2>/dev/null)
+NEW_PASSWORD=$(echo "$BODY" | jq -r '.new_password // empty' 2>/dev/null)
 
 # Password helpers
 get_pwd() { [ -f "$PASSWORD_FILE" ] && cat "$PASSWORD_FILE" || echo "$DEFAULT_PWD"; }
-
 verify_token() {
     [ -n "$TOKEN" ] && [ -f "$TOKEN_FILE" ] && [ "$TOKEN" = "$(cat $TOKEN_FILE 2>/dev/null)" ]
 }
-
 gen_token() {
     local t=$(head -c 32 /dev/urandom | md5sum | cut -d' ' -f1)
     echo "$t" > "$TOKEN_FILE"
@@ -68,46 +65,40 @@ case "$ACTION" in
 status)
     PID=$(pgrep -f "$XRAY_BIN" | head -1)
     if [ -n "$PID" ]; then
-        RUNNING=true
-        PROC_START=$(ls -ld /proc/$PID 2>/dev/null | awk '{print $6, $7, $8}')
+        RUNNING="true"
         RSS=$(awk '/VmRSS/{print int($2/1024)}' /proc/$PID/status 2>/dev/null)
         [ -z "$RSS" ] && RSS=0
     else
-        RUNNING=false
+        RUNNING="false"
         PID="--"
-        PROC_START="--"
         RSS=0
     fi
     MEM_TOTAL=$(free | awk '/Mem:/{print int($2/1024)}')
     MEM_USED=$(free | awk '/Mem:/{print int($3/1024)}')
     MEM_AVAIL=$(free | awk '/Mem:/{print int($7/1024)}')
-    CONN=$(netstat -tnp 2>/dev/null | grep -c xray 2>/dev/null || echo 0)
-    TCP_INFO=$(grep TCP /proc/net/sockstat 2>/dev/null)
+    CONN=$(ss -tnp 2>/dev/null | grep xray | wc -l)
     LOAD=$(cut -d' ' -f1-3 /proc/loadavg)
     CPUS=$(grep -c processor /proc/cpuinfo)
-    DISK=$(df -h /overlay | awk 'NR==2{print $3"/"$2" ("$5")"}')
+    DISK=$(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')
     SYS_UP=$(uptime | sed 's/.*up //;s/,.*load.*//')
-    UPTIME_FULL=$(uptime)
-
-    lua -e "
-        local j = require('luci.jsonc')
-        io.write(j.stringify({
-            running = $RUNNING,
-            pid = '$PID',
-            proc_uptime = '$PROC_START',
-            system_uptime = [[$SYS_UP]],
-            mem_used = '${MEM_USED}MB',
-            mem_total = '${MEM_TOTAL}MB',
-            mem_free = '${MEM_AVAIL}MB',
-            connections = '$CONN',
-            tcp_info = [[$TCP_INFO]],
-            system_info = [[负载: $LOAD\nCPU: ${CPUS}核\n内存: ${MEM_USED}MB/${MEM_TOTAL}MB (可用${MEM_AVAIL}MB)\n磁盘: $DISK\nXray RSS: ${RSS}MB\n\n$UPTIME_FULL]]
-        }))
-    " | { read line; json_resp "$line"; }
+    UPTIME_FULL=$(uptime | tr -d '\n')
+    # Use jq to build JSON safely (handles special characters)
+    jq -n \
+        --argjson running "$RUNNING" \
+        --arg pid "$PID" \
+        --arg system_uptime "$SYS_UP" \
+        --arg mem_used "${MEM_USED}MB" \
+        --arg mem_total "${MEM_TOTAL}MB" \
+        --arg mem_free "${MEM_AVAIL}MB" \
+        --arg connections "$CONN" \
+        --arg system_info "负载: $LOAD | CPU: ${CPUS}核 | 内存: ${MEM_USED}MB/${MEM_TOTAL}MB (可用${MEM_AVAIL}MB) | 磁盘: $DISK | Xray RSS: ${RSS}MB | $UPTIME_FULL" \
+        '{running:$running, pid:$pid, system_uptime:$system_uptime, mem_used:$mem_used, mem_total:$mem_total, mem_free:$mem_free, connections:$connections, system_info:$system_info}' \
+        > /tmp/.xray_status_resp
+    json_resp "$(cat /tmp/.xray_status_resp)"
+    rm -f /tmp/.xray_status_resp
     ;;
-
 restart)
-    /etc/init.d/xray restart >/dev/null 2>&1
+    systemctl restart xray >/dev/null 2>&1
     sleep 2
     if pgrep -f "$XRAY_BIN" >/dev/null; then
         json_resp '{"message":"Xray 已重启"}'
@@ -115,14 +106,12 @@ restart)
         json_resp '{"error":"重启失败"}'
     fi
     ;;
-
 stop)
-    /etc/init.d/xray stop >/dev/null 2>&1
+    systemctl stop xray >/dev/null 2>&1
     json_resp '{"message":"Xray 已停止"}'
     ;;
-
 start)
-    /etc/init.d/xray start >/dev/null 2>&1
+    systemctl start xray >/dev/null 2>&1
     sleep 2
     if pgrep -f "$XRAY_BIN" >/dev/null; then
         json_resp '{"message":"Xray 已启动"}'
@@ -130,72 +119,71 @@ start)
         json_resp '{"error":"启动失败"}'
     fi
     ;;
-
 test)
     T1=$(curl -s -o /dev/null -w '%{http_code}|%{time_total}' --connect-timeout 8 https://www.google.com 2>&1)
     T2=$(curl -s -o /dev/null -w '%{http_code}|%{time_total}' --connect-timeout 8 http://gitlab.hisense.com/users/sign_in 2>&1)
     T3=$(curl -s -o /dev/null -w '%{http_code}|%{time_total}' --connect-timeout 8 http://172.16.43.111 2>&1)
     T4=$(curl -s -o /dev/null -w '%{http_code}|%{time_total}' --connect-timeout 8 https://www.baidu.com 2>&1)
-    lua -e "
-        local j = require('luci.jsonc')
-        local function p(s)
-            local code, time = s:match('(%d+)|([%d%.]+)')
-            code = tonumber(code or '0')
-            return { ok = (code >= 200 and code < 400), code = tostring(code), time = (time or '0') .. 's' }
-        end
-        io.write(j.stringify({results={
-            ['test-google']=p('$T1'),
-            ['test-office-domain']=p('$T2'),
-            ['test-office-ip']=p('$T3'),
-            ['test-baidu']=p('$T4')
-        }}))
-    " | { read line; json_resp "$line"; }
+    parse_test() {
+        local code=$(echo "$1" | cut -d'|' -f1)
+        local time=$(echo "$1" | cut -d'|' -f2)
+        local ok="false"
+        [ "$code" -ge 200 ] 2>/dev/null && [ "$code" -lt 400 ] 2>/dev/null && ok="true"
+        echo "{\"ok\":$ok,\"code\":\"$code\",\"time\":\"${time}s\"}"
+    }
+    R1=$(parse_test "$T1")
+    R2=$(parse_test "$T2")
+    R3=$(parse_test "$T3")
+    R4=$(parse_test "$T4")
+    json_resp "{\"results\":{\"test-google\":$R1,\"test-office-domain\":$R2,\"test-office-ip\":$R3,\"test-baidu\":$R4}}"
     ;;
-
 config_get)
-    CONFIG_B64=$(base64 "$XRAY_CONF" 2>/dev/null | tr -d '\n')
+    CONFIG_B64=$(base64 -w0 "$XRAY_CONF" 2>/dev/null)
     json_resp "{\"config_b64\":\"$CONFIG_B64\"}"
     ;;
-
 config_save)
-    # Extract base64 config from body and validate
-    echo "$BODY" > /tmp/.xray_panel_body
-    CONFIG_B64=$(lua -e 'local j=require("luci.jsonc"); local f=io.open("/tmp/.xray_panel_body","r"); local d=j.parse(f:read("*a")); f:close(); if d and d.config_b64 then io.write(d.config_b64) end')
+    CONFIG_B64=$(echo "$BODY" | jq -r '.config_b64 // empty' 2>/dev/null)
     if [ -n "$CONFIG_B64" ]; then
         echo "$CONFIG_B64" | base64 -d > /tmp/.xray_panel_cfg 2>/dev/null
-        VALID=$(lua -e 'local j=require("luci.jsonc"); local f=io.open("/tmp/.xray_panel_cfg","r"); local c=f:read("*a"); f:close(); local d=j.parse(c); if d then io.write("ok") else io.write("fail") end')
-        if [ "$VALID" != "ok" ]; then
-            json_resp '{"error":"JSON 格式无效"}'
-        else
+        if jq empty /tmp/.xray_panel_cfg 2>/dev/null; then
             cp "$XRAY_CONF" "${XRAY_CONF}.bak"
             cp /tmp/.xray_panel_cfg "$XRAY_CONF"
             json_resp '{"message":"配置已保存（需重启生效）"}'
+        else
+            json_resp '{"error":"JSON 格式无效"}'
         fi
         rm -f /tmp/.xray_panel_cfg
     else
         json_resp '{"error":"无效请求"}'
     fi
-    rm -f /tmp/.xray_panel_body
     ;;
-
 config_validate)
     R=$($XRAY_BIN run -test -c "$XRAY_CONF" 2>&1)
     if echo "$R" | grep -q 'Configuration OK'; then
-        json_resp '{"message":"✓ 配置语法正确"}'
+        json_resp '{"message":"Configuration OK"}'
     else
-        ERR=$(echo "$R" | grep -i 'fail' | tail -1 | sed 's/"/\\"/g')
-        lua -e "
-            local j = require('luci.jsonc')
-            io.write(j.stringify({error='语法错误: ' .. [[$ERR]]}))
-        " | { read line; json_resp "$line"; }
+        ERR=$(echo "$R" | grep -i 'fail' | tail -1)
+        # Use jq to safely escape the error message
+        RESP=$(jq -n --arg err "$ERR" '{error: ("语法错误: " + $err)}')
+        json_resp "$RESP"
     fi
     ;;
-
 logs)
-    LOGS_B64=$( { logread 2>/dev/null | grep -i xray | tail -80; echo ""; echo "--- xray.log ---"; tail -50 /tmp/xray.log 2>/dev/null; } | base64 | tr -d '\n')
+    # Support lines parameter from frontend
+    ERROR_LINES=$(echo "$BODY" | jq -r '.error_lines // empty' 2>/dev/null)
+    ACCESS_LINES=$(echo "$BODY" | jq -r '.access_lines // empty' 2>/dev/null)
+    [ -z "$ERROR_LINES" ] && ERROR_LINES=50
+    [ -z "$ACCESS_LINES" ] && ACCESS_LINES=30
+    {
+        printf "=== Error Log (last %s lines) ===\n" "$ERROR_LINES"
+        tail -"$ERROR_LINES" /var/log/xray/error.log 2>/dev/null
+        printf "\n=== Access Log (last %s lines) ===\n" "$ACCESS_LINES"
+        tail -"$ACCESS_LINES" /var/log/xray/access.log 2>/dev/null
+    } > /tmp/.xray_logs_tmp
+    LOGS_B64=$(base64 -w0 /tmp/.xray_logs_tmp)
+    rm -f /tmp/.xray_logs_tmp
     json_resp "{\"logs_b64\":\"$LOGS_B64\"}"
     ;;
-
 change_password)
     if [ -n "$NEW_PASSWORD" ]; then
         PWD_LEN=$(echo -n "$NEW_PASSWORD" | wc -c)
@@ -210,47 +198,44 @@ change_password)
         json_resp '{"error":"密码至少4位"}'
     fi
     ;;
-
 geodata_status)
-    GEOIP_INFO=$(ls -la "$XRAY_DIR/geoip.dat" 2>/dev/null | awk '{printf "%s (%s %s %s)", $5, $6, $7, $8}')
-    GEOSITE_INFO=$(ls -la "$XRAY_DIR/geosite.dat" 2>/dev/null | awk '{printf "%s (%s %s %s)", $5, $6, $7, $8}')
-    # Format file sizes
-    GEOIP_SIZE=$(wc -c < "$XRAY_DIR/geoip.dat" 2>/dev/null)
-    GEOSITE_SIZE=$(wc -c < "$XRAY_DIR/geosite.dat" 2>/dev/null)
-    GEOIP_MB=$(awk "BEGIN{printf \"%.1f\", ${GEOIP_SIZE:-0}/1048576}")
-    GEOSITE_MB=$(awk "BEGIN{printf \"%.1f\", ${GEOSITE_SIZE:-0}/1048576}")
-    GEOIP_DATE=$(date -r "$XRAY_DIR/geoip.dat" '+%Y-%m-%d %H:%M' 2>/dev/null || ls -la "$XRAY_DIR/geoip.dat" 2>/dev/null | awk '{print $6, $7, $8}')
-    GEOSITE_DATE=$(date -r "$XRAY_DIR/geosite.dat" '+%Y-%m-%d %H:%M' 2>/dev/null || ls -la "$XRAY_DIR/geosite.dat" 2>/dev/null | awk '{print $6, $7, $8}')
-    UPDATE_LOG=$(cat /tmp/geodata_update.log 2>/dev/null | tail -5)
-    # Get current crontab schedule
+    GEOIP_SIZE=$(wc -c < "$XRAY_DIR/geoip.dat" 2>/dev/null || echo 0)
+    GEOSITE_SIZE=$(wc -c < "$XRAY_DIR/geosite.dat" 2>/dev/null || echo 0)
+    GEOIP_MB=$(awk "BEGIN{printf \"%.1f\", ${GEOIP_SIZE}/1048576}")
+    GEOSITE_MB=$(awk "BEGIN{printf \"%.1f\", ${GEOSITE_SIZE}/1048576}")
+    GEOIP_DATE=$(date -r "$XRAY_DIR/geoip.dat" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unknown")
+    GEOSITE_DATE=$(date -r "$XRAY_DIR/geosite.dat" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unknown")
     SCHEDULE=$(crontab -l 2>/dev/null | grep 'update-geodata' | awk '{print $1, $2, $3, $4, $5}')
-    lua -e "
-        local j = require('luci.jsonc')
-        io.write(j.stringify({
-            geoip = '${GEOIP_MB}MB (${GEOIP_DATE})',
-            geosite = '${GEOSITE_MB}MB (${GEOSITE_DATE})',
-            schedule = [[$SCHEDULE]],
-            update_log = [[$UPDATE_LOG]]
-        }))
-    " | { read line; json_resp "$line"; }
+    json_resp "{\"geoip\":\"${GEOIP_MB}MB (${GEOIP_DATE})\",\"geosite\":\"${GEOSITE_MB}MB (${GEOSITE_DATE})\",\"schedule\":\"$SCHEDULE\"}"
     ;;
-
 geodata_update)
-    /usr/local/xray/update-geodata.sh >/dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        json_resp '{"message":"规则库更新成功，已重启 Xray"}'
+    # Run in background to avoid CGI timeout
+    nohup /bin/sh -c '/usr/local/xray/update-geodata.sh > /tmp/.geodata_update_result 2>&1; echo $? > /tmp/.geodata_update_exit' >/dev/null 2>&1 &
+    json_resp '{"message":"规则库更新已启动（后台执行中，约1-2分钟完成）"}'
+    ;;
+geodata_update_status)
+    # Check if background update is still running
+    if pgrep -f "update-geodata.sh" >/dev/null 2>&1; then
+        json_resp '{"status":"running","message":"更新中..."}'
+    elif [ -f /tmp/.geodata_update_exit ]; then
+        EXIT_CODE=$(cat /tmp/.geodata_update_exit)
+        RESULT=$(cat /tmp/.geodata_update_result 2>/dev/null | tail -5)
+        rm -f /tmp/.geodata_update_exit /tmp/.geodata_update_result
+        if [ "$EXIT_CODE" = "0" ]; then
+            json_resp '{"status":"done","message":"规则库更新完成，已重启 Xray"}'
+        else
+            RESP=$(jq -n --arg msg "$RESULT" '{status:"error", message: ("更新失败: " + $msg)}')
+            json_resp "$RESP"
+        fi
     else
-        json_resp '{"error":"更新失败，请查看日志"}'
+        json_resp '{"status":"idle","message":"无正在进行的更新"}'
     fi
     ;;
-
 geodata_schedule)
-    SCHEDULE=$(echo "$BODY" | lua -e 'local j=require("luci.jsonc"); local d=j.parse(io.read("*a")); io.write(d and d.schedule or "")')
-    # Remove old geodata cron entry
+    SCHEDULE=$(echo "$BODY" | jq -r '.schedule // empty' 2>/dev/null)
     crontab -l 2>/dev/null | grep -v 'update-geodata' > /tmp/.cron_tmp
-    # Add new if not empty
     if [ -n "$SCHEDULE" ]; then
-        echo "$SCHEDULE /usr/local/xray/update-geodata.sh" >> /tmp/.cron_tmp
+        echo "$SCHEDULE /usr/local/xray/update-geodata.sh >> /var/log/geodata-update.log 2>&1" >> /tmp/.cron_tmp
     fi
     crontab /tmp/.cron_tmp
     rm -f /tmp/.cron_tmp
@@ -260,7 +245,21 @@ geodata_schedule)
         json_resp '{"message":"定时更新已禁用"}'
     fi
     ;;
-
+office_nets_get)
+    NETS=$(cat "$XRAY_DIR/office-networks.txt" 2>/dev/null)
+    NETS_JSON=$(echo "$NETS" | jq -R -s 'split("\n") | map(select(length > 0))' 2>/dev/null)
+    json_resp "{\"networks\":$NETS_JSON}"
+    ;;
+office_nets_save)
+    NETS=$(echo "$BODY" | jq -r '.networks // empty' 2>/dev/null)
+    if [ -n "$NETS" ]; then
+        echo "$NETS" | jq -r '.[]' > "$XRAY_DIR/office-networks.txt" 2>/dev/null
+        /usr/local/xray/update-office-nets.sh >/dev/null 2>&1
+        json_resp '{"message":"内网 IP 段已更新（nftables 已热更新，xray config 已同步，需重启 Xray 完全生效）"}'
+    else
+        json_resp '{"error":"无效数据"}'
+    fi
+    ;;
 *)
     json_resp '{"error":"未知操作"}'
     ;;
