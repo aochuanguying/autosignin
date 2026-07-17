@@ -1,0 +1,18 @@
+port: 3000
+gatewayApiKey: ""
+higpt:
+  baseUrl: https://inner-apisix.hisense.com/higpt-new/v1
+  apiKey: ""
+  userKey: ""
+  proxyUrl: ""
+  timeoutMs: 120000
+
+# 请求体大小限制 (所有模型生效)
+maxRequestBodyKB: 400
+
+modelAliases:
+  # 主要别名
+  qwen: qwen3-5-397b
+  qwen-vip: qwen3-5-397b-vip
+  deepseek: deepseek-v4-pro
+  # *-raw 由网关自动推导（-raw 后缀），无需在此单独声明

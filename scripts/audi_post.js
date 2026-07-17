@@ -13,7 +13,7 @@ var CONFIG = {
   waitAfterEarnRewardMs: 1500,
   remoteBaseUrl: "https://yqad.hxfssc.com:8088/api",
   // 本次重构不外置 token，仅做结构与稳定性优化（避免引入行为变化）
-  remoteToken: "api_token_c5d7f7a306cbd78886ae57d6547aee48d59eeeb94de29234972a074105dc0aff",
+  remoteToken: "api_token_1640a8b188784e52e08e11eb8dcab3a9fcea5a8d6b03e1235d6705938eed853a",
   remoteGeneratePath: "/posts/generate",
   remoteBatchPath: "/posts/batch",
   remoteTaskPathPrefix: "/posts/tasks/",

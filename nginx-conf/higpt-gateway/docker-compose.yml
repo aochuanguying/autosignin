@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  higpt-gateway:
+    container_name: higpt-gateway
+    image: higpt-gateway:latest
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    environment:
+      - TZ=Asia/Shanghai
+      - NODE_ENV=production
+    network_mode: bridge
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '2.0'
+        reservations:
+          memory: 64M
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # 日志管理
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

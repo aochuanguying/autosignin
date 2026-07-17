@@ -45,7 +45,7 @@ CALL_FORWARD_PATH = "/api/posts/mobile/missed-calls"
 SMS_FORWARD_PATH = "/api/posts/mobile/sms"
 
 # API Token（外部设备访问，格式：Bearer <token>）
-API_TOKEN = "api_token_c5d7f7a306cbd78886ae57d6547aee48d59eeeb94de29234972a074105dc0aff"
+API_TOKEN = "api_token_1640a8b188784e52e08e11eb8dcab3a9fcea5a8d6b03e1235d6705938eed853a"
 
 # 轮询间隔（秒）
 CALL_POLL_INTERVAL = 10
@@ -157,8 +157,13 @@ def init_state_db():
         return False
 
 
+# 内存缓存：保存最后一次成功加载的状态，防止数据库故障时回退到 id=0 导致全量重发
+_last_good_state = None
+
+
 def load_state():
-    """加载全部四个状态"""
+    """加载全部四个状态，数据库故障时使用上次成功加载的缓存"""
+    global _last_good_state
     init_state_db()
 
     try:
@@ -168,17 +173,24 @@ def load_state():
         if rc == 0 and out:
             parts = out.split("|")
             if len(parts) >= 8:
-                return {
+                state = {
                     "http_call": {"ts": parts[0] or "0", "id": int(parts[1]) if parts[1] else 0},
                     "http_sms":  {"ts": parts[2] or "0", "id": int(parts[3]) if parts[3] else 0},
                     "bark_call": {"ts": parts[4] or "0", "id": int(parts[5]) if parts[5] else 0},
                     "bark_sms":  {"ts": parts[6] or "0", "id": int(parts[7]) if parts[7] else 0},
                 }
+                _last_good_state = state
+                return state
         logger.warning(f"加载状态失败，rc={rc}, out='{out}', err='{err}'")
     except Exception as e:
         logger.warning(f"加载状态异常：{e}")
 
-    # fallback
+    # 使用上次成功加载的缓存，避免回退到 id=0 导致全量重发
+    if _last_good_state is not None:
+        logger.warning("使用内存缓存状态（避免全量重发）")
+        return _last_good_state
+
+    # 仅首次启动且数据库完全不可用时才 fallback
     return {
         "http_call": {"ts": "0", "id": 0},
         "http_sms":  {"ts": "0", "id": 0},
@@ -566,6 +578,27 @@ def poll_loop():
 def main():
     logger.info("=== 未接来电 & 短信转发服务启动 ===")
 
+    # 单实例保护：检查 PID 文件
+    pid_file = os.path.join(SCRIPT_DIR, "call_sms_forwarding.pid")
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                old_pid = int(f.read().strip())
+            # 检查进程是否还在运行
+            os.kill(old_pid, 0)
+            logger.error(f"另一个实例已在运行 (PID: {old_pid})，退出")
+            return
+        except (ProcessLookupError, ValueError, OSError):
+            # 进程不存在，清理旧 PID 文件
+            pass
+
+    # 写入当前 PID
+    try:
+        with open(pid_file, "w") as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        logger.warning(f"写入 PID 文件失败：{e}")
+
     if TEST_MODE:
         logger.info("测试模式：事件将记录到日志文件，不调用转发 API")
         logger.info(f"事件日志：{EVENT_LOG_FILE}")
@@ -592,6 +625,12 @@ def main():
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("服务已停止")
+    finally:
+        # 清理 PID 文件
+        try:
+            os.remove(pid_file)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

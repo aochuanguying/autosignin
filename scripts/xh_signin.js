@@ -25,24 +25,24 @@ var CONFIG = {
   clockOffBtnText: "下班打卡",
   
   // 时间配置
-  startupWaitMs: 20000,           // APP 启动等待超时
+  startupWaitMs: 40000,           // APP 启动等待超时（增加到 40 秒，冷启动较慢）
   waitAfterHomeReadyMs: 1000,     // 页面切换后等待时间
   useRoot: true,                  // 是否使用 Root 权限
   screenOffAfterRun: true,        // 运行后是否熄屏
   keepScreenOnMs: 300000,         // 设备保持亮屏时间（5 分钟）
   
-  // 打卡区域等待超时（2 分钟）
-  clockInRangeTimeoutMs: 120000,
-  // 元素查找超时
-  elementFindTimeoutMs: 5000,
+  // 打卡区域等待超时（3 分钟，GPS 定位可能较慢）
+  clockInRangeTimeoutMs: 180000,
+  // 元素查找超时（增加到 15 秒，下班区域可能加载慢）
+  elementFindTimeoutMs: 15000,
   // 点击后等待页面更新
   clickWaitMs: 5000,
   // 打卡结果验证重试次数
   verifyRetryCount: 3,
   // 验证失败重试间隔
   verifyRetryIntervalMs: 2000,
-  // 随机延迟范围（0-10 分钟）
-  randomDelayMaxMinutes: 10,
+  // 随机延迟范围（0-5 分钟，缩短以留出重试时间）
+  randomDelayMaxMinutes: 5,
   // 首页稳定检测次数
   homeStableCount: 3,
   // APP 启动重试次数
@@ -264,6 +264,206 @@ function checkInRange(workArea) {
   return false;
 }
 
+/**
+ * 从首页导航到签到打卡页面（封装公共导航逻辑）
+ * 步骤：消息(检查休假) → 工作台 → 签到 → 等待加载
+ * @returns {{success: boolean, onVacation: boolean}} 
+ */
+function navigateToClockPage() {
+  var postClickWaitMs = 1000;
+  
+  // 步骤 1：点击消息，校验休假状态
+  logStage("导航", "点击消息，校验休假状态");
+  if (!clickElementWithParent(
+    CONFIG.workbenchItemId,
+    "消息",
+    { className: CONFIG.workbenchParentClass },
+    "消息",
+    CONFIG.elementFindTimeoutMs
+  )) {
+    logStage("导航", "✗ 未找到消息元素");
+    return { success: false, onVacation: false };
+  }
+  sleep(postClickWaitMs);
+  
+  // 检查休假状态
+  var statusElements = id("custom_status_title").find();
+  if (statusElements && statusElements.size() > 0) {
+    for (var i = 0; i < statusElements.size(); i++) {
+      try {
+        var statusText = statusElements.get(i).text();
+        logStage("导航", "找到状态元素：" + statusText);
+        if (statusText && statusText.indexOf("休假") !== -1) {
+          logStage("导航", "✓ 检测到休假状态：" + statusText);
+          return { success: true, onVacation: true };
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
+  logStage("导航", "未检测到休假状态");
+  
+  // 步骤 2：点击工作台（带 back 回退重试）
+  logStage("导航", "点击工作台");
+  if (!clickElementWithParent(
+    CONFIG.workbenchItemId,
+    CONFIG.workbenchItemText,
+    { className: CONFIG.workbenchParentClass },
+    "工作台",
+    CONFIG.elementFindTimeoutMs
+  )) {
+    logStage("导航", "首次未找到工作台，按返回键重试");
+    back();
+    sleep(1500);
+    if (!clickElementWithParent(
+      CONFIG.workbenchItemId,
+      CONFIG.workbenchItemText,
+      { className: CONFIG.workbenchParentClass },
+      "工作台",
+      CONFIG.elementFindTimeoutMs
+    )) {
+      logStage("导航", "✗ 点击工作台失败");
+      return { success: false, onVacation: false };
+    }
+  }
+  logStage("导航", "✓ 点击工作台成功");
+  sleep(CONFIG.waitAfterHomeReadyMs);
+  
+  // 步骤 3：点击签到
+  logStage("导航", "点击签到");
+  if (!clickElementWithParent(
+    CONFIG.signinEntryId,
+    CONFIG.signinEntryText,
+    {},
+    "签到入口",
+    CONFIG.elementFindTimeoutMs
+  )) {
+    logStage("导航", "✗ 点击签到失败");
+    return { success: false, onVacation: false };
+  }
+  logStage("导航", "✓ 点击签到成功");
+  sleep(3000); // 等待签到页加载
+  
+  // 步骤 4：检查今日休息
+  var restElements = text("今日休息").find();
+  if (restElements && restElements.size() > 0) {
+    logStage("导航", "✓ 发现'今日休息'，今天不用打卡");
+    return { success: true, onVacation: true };
+  }
+  
+  logStage("导航", "✓ 已到达签到打卡页面");
+  return { success: true, onVacation: false };
+}
+
+/**
+ * 冷启动 APP 并导航到签到页（封装 forceStop + launch + 等首页 + 导航）
+ * @returns {{success: boolean, onVacation: boolean}}
+ */
+function coldStartAndNavigate() {
+  commonUtils.forceStop(CONFIG.appPackage, CONFIG.useRoot);
+  sleep(2000);
+  
+  if (!launchXinhongApp()) {
+    logStage("冷启动", "APP 启动失败");
+    return { success: false, onVacation: false };
+  }
+  
+  if (!waitForMainPageReady()) {
+    logStage("冷启动", "首页未就绪");
+    return { success: false, onVacation: false };
+  }
+  sleep(CONFIG.waitAfterHomeReadyMs);
+  
+  return navigateToClockPage();
+}
+
+/**
+ * 等待进入打卡范围，带完整重启 APP 重试
+ * 如果 30 秒内未进入范围，关闭 APP 重新打开并走完整导航流程
+ * @param {string} areaType - "上班" 或 "下班"
+ * @param {number} totalTimeoutMs - 总超时时间
+ * @returns {{success: boolean, workArea: UiObject|null}} 是否进入范围及最新的打卡区域
+ */
+function waitForInRangeWithRestart(areaType, totalTimeoutMs) {
+  var checkIntervalMs = 500;
+  var refreshIntervalMs = 30000; // 30 秒未定位则重启 APP
+  var totalDeadline = Date.now() + totalTimeoutMs;
+  var restartCount = 0;
+  var maxRestartAttempts = 3;
+  
+  // 获取初始打卡区域
+  var workArea = findClockArea(areaType);
+  if (!workArea) {
+    logStage("等待范围", "未找到打卡区域（" + areaType + "）");
+    return { success: false, workArea: null };
+  }
+  
+  while (Date.now() < totalDeadline) {
+    var phaseEnd = Math.min(Date.now() + refreshIntervalMs, totalDeadline);
+    
+    var checkCount = 0;
+    while (Date.now() < phaseEnd) {
+      checkCount++;
+      if (checkInRange(workArea)) {
+        logStage("等待范围", "✓ 已进入打卡范围（" + areaType + "，检查 " + checkCount + " 次）");
+        return { success: true, workArea: workArea };
+      }
+      sleep(checkIntervalMs);
+    }
+    
+    // 如果还在总超时内且没超过重启次数，关闭 APP 完全重启
+    if (Date.now() < totalDeadline && restartCount < maxRestartAttempts) {
+      restartCount++;
+      logStage("等待范围", "30 秒未定位成功，关闭 APP 完全重启（第 " + restartCount + " 次）");
+      
+      var navResult = coldStartAndNavigate();
+      if (!navResult.success || navResult.onVacation) {
+        logStage("等待范围", "重启后导航失败或发现休息日");
+        return { success: false, workArea: null };
+      }
+      
+      // 重新获取打卡区域
+      workArea = findClockArea(areaType);
+      if (!workArea) {
+        logStage("等待范围", "重启后未找到打卡区域");
+        return { success: false, workArea: null };
+      }
+      logStage("等待范围", "重启完成，继续等待定位");
+    }
+  }
+  
+  logStage("等待范围", "✗ 等待超时，未进入打卡范围（" + areaType + "）");
+  return { success: false, workArea: workArea };
+}
+
+/**
+ * 查找打卡区域（带滑动重试）
+ * @param {string} areaType - "上班" 或 "下班"
+ * @returns {UiObject|null}
+ */
+function findClockArea(areaType) {
+  if (areaType === "上班") {
+    return id("card0").findOne(CONFIG.elementFindTimeoutMs);
+  }
+  // 下班区域
+  var area = id("last_clock_timeline_card").findOne(CONFIG.elementFindTimeoutMs);
+  if (area) return area;
+  
+  // 尝试向下滑动查找
+  logStage("查找区域", "下班区域未找到，尝试滑动");
+  var displayH = device.height;
+  var displayW = device.width;
+  for (var i = 0; i < 3; i++) {
+    shell("input swipe " + (displayW / 2) + " " + Math.floor(displayH * 0.7) + " " + (displayW / 2) + " " + Math.floor(displayH * 0.3) + " 500", true);
+    sleep(1500);
+    area = id("last_clock_timeline_card").findOne(5000);
+    if (area) {
+      logStage("查找区域", "✓ 滑动第 " + (i + 1) + " 次后找到");
+      return area;
+    }
+  }
+  return null;
+}
+
 function waitForMainPageReady() {
   logStage("等待首页", "等待工作台元素出现");
   var deadline = Date.now() + CONFIG.startupWaitMs;
@@ -369,23 +569,13 @@ function performClockIn() {
   
   // 5.3 等待进入打卡范围
   logStage("步骤 5", "等待进入打卡范围（最多 " + (CONFIG.clockInRangeTimeoutMs / 1000) + " 秒）");
-  var inRange = false;
-  var waitDeadline = Date.now() + CONFIG.clockInRangeTimeoutMs;
-  var checkCount = 0;
-  while (Date.now() < waitDeadline) {
-    checkCount++;
-    if (checkInRange(workArea)) {
-      inRange = true;
-      logStage("步骤 5", "✓ 已进入打卡范围（检查 " + checkCount + " 次）");
-      break;
-    }
-    sleep(checkIntervalMs);
-  }
+  var rangeResult = waitForInRangeWithRestart("上班", CONFIG.clockInRangeTimeoutMs);
   
-  if (!inRange) {
+  if (!rangeResult.success) {
     logStage("步骤 5", "✗ 等待超时，未进入打卡范围");
     return false;
   }
+  workArea = rangeResult.workArea;
   
   // 5.4 点击上班打卡按钮
   logStage("步骤 5", "点击上班打卡按钮");
@@ -525,7 +715,7 @@ function performClockOff() {
   
   // 6.1 查找下班打卡区域
   logStage("步骤 6", "查找下班打卡区域（id=last_clock_timeline_card）");
-  var clockOffArea = id("last_clock_timeline_card").findOne(CONFIG.elementFindTimeoutMs);
+  var clockOffArea = findClockArea("下班");
   if (!clockOffArea) {
     logStage("步骤 6", "✗ 未找到下班打卡区域");
     return false;
@@ -564,23 +754,13 @@ function performClockOff() {
   
   // 6.3 等待进入打卡范围
   logStage("步骤 6", "等待进入打卡范围（最多 " + (CONFIG.clockInRangeTimeoutMs / 1000) + " 秒）");
-  var inRange = false;
-  var waitDeadline = Date.now() + CONFIG.clockInRangeTimeoutMs;
-  var checkCount = 0;
-  while (Date.now() < waitDeadline) {
-    checkCount++;
-    if (checkInRange(clockOffArea)) {
-      inRange = true;
-      logStage("步骤 6", "✓ 已进入打卡范围（检查 " + checkCount + " 次）");
-      break;
-    }
-    sleep(checkIntervalMs);
-  }
+  var rangeResult = waitForInRangeWithRestart("下班", CONFIG.clockInRangeTimeoutMs);
   
-  if (!inRange) {
+  if (!rangeResult.success) {
     logStage("步骤 6", "✗ 等待超时，未进入打卡范围");
     return false;
   }
+  clockOffArea = rangeResult.workArea;
   
   // 6.4 查找下班打卡按钮
   logStage("步骤 6", "查找下班打卡按钮（text=下班打卡）");
@@ -634,107 +814,25 @@ function getRandomDelay() {
  */
 function performFullClockProcess(clockType) {
   logStage("开始执行", "执行" + clockType + "打卡流程");
-  var postClickWaitMs = 1000;
   
   commonUtils.prepareDevice({ keepMs: CONFIG.keepScreenOnMs });
   logStage("设备准备", "已亮屏并保持唤醒 " + (CONFIG.keepScreenOnMs / 1000) + " 秒");
 
-  // 强制停止用于清理残留状态
-  commonUtils.forceStop(CONFIG.appPackage, CONFIG.useRoot);
-  sleep(1500);
-  logStage("清理状态", "已强制停止历史进程");
-
-  if (!launchXinhongApp()) {
-    logStage("错误", "打开 APP 失败或未进入前台");
+  // 冷启动 APP 并导航到签到页
+  var navResult = coldStartAndNavigate();
+  if (!navResult.success) {
+    logStage("错误", "导航到签到页失败");
     return false;
   }
-
-  if (!waitForMainPageReady()) {
-    logStage("错误", "首页未就绪，可能 APP 启动失败");
-    return false;
-  }
-
-  sleep(CONFIG.waitAfterHomeReadyMs);
-  logStage("首页稳定", "等待 " + CONFIG.waitAfterHomeReadyMs + "ms 后继续");
-
-  // ========== 步骤 1：点击消息，校验休假状态 ==========
-  logStage("步骤 1", "点击消息，校验休假状态");
-  if (!clickElementWithParent(
-    CONFIG.workbenchItemId,
-    "消息",
-    { className: CONFIG.workbenchParentClass },
-    "消息",
-    CONFIG.elementFindTimeoutMs
-  )) {
-    logStage("步骤 1", "✗ 未找到'消息'元素");
-    return false;
-  }
-  sleep(postClickWaitMs);
-  
-  // 检查休假状态
-  var statusElements = id("custom_status_title").find();
-  if (statusElements && statusElements.size() > 0) {
-    for (var i = 0; i < statusElements.size(); i++) {
-      try {
-        var statusText = statusElements.get(i).text();
-        logStage("步骤 1", "找到状态元素：" + statusText);
-        if (statusText && statusText.indexOf("休假") !== -1) {
-          logStage("步骤 1", "✓ 检测到休假状态：" + statusText + "，跳过打卡");
-          return true;
-        }
-      } catch (e) {
-        logStage("步骤 1", "第 " + (i + 1) + " 个状态元素文本获取失败：" + e);
-      }
-    }
-  }
-  logStage("步骤 1", "未检测到休假状态");
-  
-  // ========== 步骤 2：点击工作台 ==========
-  logStage("步骤 2", "点击工作台");
-  if (!clickElementWithParent(
-    CONFIG.workbenchItemId,
-    CONFIG.workbenchItemText,
-    { className: CONFIG.workbenchParentClass },
-    "工作台",
-    CONFIG.elementFindTimeoutMs
-  )) {
-    logStage("步骤 2", "✗ 点击工作台失败");
-    return false;
-  }
-  logStage("步骤 2", "✓ 点击工作台成功");
-  sleep(CONFIG.waitAfterHomeReadyMs);
-  
-  // ========== 步骤 3：点击签到 ==========
-  logStage("步骤 3", "点击签到");
-  if (!clickElementWithParent(
-    CONFIG.signinEntryId,
-    CONFIG.signinEntryText,
-    {},
-    "签到入口",
-    CONFIG.elementFindTimeoutMs
-  )) {
-    logStage("步骤 3", "✗ 点击签到失败");
-    return false;
-  }
-  logStage("步骤 3", "✓ 点击签到成功");
-  sleep(CONFIG.waitAfterHomeReadyMs);
-  
-  // ========== 步骤 4：检查今日休息 ==========
-  logStage("步骤 4", "等待页面加载（3 秒）");
-  sleep(3000);  // 增加等待时间，确保页面完全加载
-  
-  logStage("步骤 4", "检查今日休息");
-  var restElements = text("今日休息").find();
-  if (restElements && restElements.size() > 0) {
-    logStage("步骤 4", "✓ 发现'今日休息'元素，今天休息");
+  if (navResult.onVacation) {
+    logStage("结果", "✓ 今天休假/休息，跳过打卡");
     return true;
   }
-  logStage("步骤 4", "未发现'今日休息'，继续执行打卡");
   
-  // ========== 步骤 5/6：执行打卡 ==========
+  // 执行打卡
   if (clockType === "上班") {
     if (!performClockIn()) {
-      console.error("步骤 5：上班签到失败");
+      logStage("错误", "步骤 5：上班签到失败");
       return false;
     }
   } else if (clockType === "下班") {
@@ -749,6 +847,7 @@ function performFullClockProcess(clockType) {
 
 function main() {
   var screenOffDelayMs = 1000;
+  var MAX_FULL_RETRIES = 2; // 整体最多重试 2 次（共执行 3 次）
   
   try {
     var now = new Date();
@@ -758,41 +857,50 @@ function main() {
     
     logStage("时间检查", "当前时间：" + currentTimeStr);
     
+    var clockType = null;
     if (hour < 9) {
+      clockType = "上班";
       logStage("时间策略", "当前时间在 9:00 之前，准备执行上班打卡");
-      var delayMs = getRandomDelay();
-      logStage("时间策略", "等待 " + Math.round(delayMs / 1000 / 60) + " 分钟后执行上班打卡");
-      
-      if (device.isScreenOn()) {
-        device.cancelKeepingAwake();
-        shell("input keyevent 223", true);
-        sleep(screenOffDelayMs);
-      }
-      sleep(delayMs);
-      
-      if (!performFullClockProcess("上班")) {
-        logStage("错误", "上班打卡流程执行失败");
-        return;
-      }
     } else if (hour >= 18) {
+      clockType = "下班";
       logStage("时间策略", "当前时间在 18:00 之后，准备执行下班打卡");
-      var delayMs = getRandomDelay();
-      logStage("时间策略", "等待 " + Math.round(delayMs / 1000 / 60) + " 分钟后执行下班打卡");
-      
-      if (device.isScreenOn()) {
-        device.cancelKeepingAwake();
-        shell("input keyevent 223", true);
-        sleep(screenOffDelayMs);
-      }
-      sleep(delayMs);
-      
-      if (!performFullClockProcess("下班")) {
-        logStage("错误", "下班打卡流程执行失败");
-        return;
-      }
     } else {
       logStage("时间策略", "当前时间不在允许范围内（9:00 之前或 18:00 之后），不执行打卡");
       return;
+    }
+    
+    // 随机延迟
+    var delayMs = getRandomDelay();
+    logStage("时间策略", "等待 " + Math.round(delayMs / 1000 / 60) + " 分钟后执行" + clockType + "打卡");
+    
+    if (device.isScreenOn()) {
+      device.cancelKeepingAwake();
+      shell("input keyevent 223", true);
+      sleep(screenOffDelayMs);
+    }
+    sleep(delayMs);
+    
+    // 带整体重试的打卡执行
+    var success = false;
+    for (var attempt = 0; attempt <= MAX_FULL_RETRIES; attempt++) {
+      if (attempt > 0) {
+        logStage("重试", "第 " + attempt + " 次整体重试，等待 5 秒");
+        commonUtils.forceStop(CONFIG.appPackage, CONFIG.useRoot);
+        sleep(5000);
+      }
+      
+      if (performFullClockProcess(clockType)) {
+        success = true;
+        break;
+      }
+      
+      if (attempt < MAX_FULL_RETRIES) {
+        logStage("重试", clockType + "打卡失败，准备整体重试");
+      }
+    }
+    
+    if (!success) {
+      logStage("错误", clockType + "打卡最终失败（已重试 " + MAX_FULL_RETRIES + " 次）");
     }
     
   } catch (e) {

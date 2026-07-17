@@ -4,9 +4,14 @@
 # IDE
 .idea/
 .vscode/
+.kiro/
+.trae/
 *.swp
 *.swo
 *~
+
+# OpenSpec 工作目录
+openspec/
 
 # Python
 __pycache__/

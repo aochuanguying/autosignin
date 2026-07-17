@@ -12,12 +12,26 @@ FORWARD_SCRIPT="/data/data/com.termux/files/home/scripts/call_sms_forwarding.py"
 PYTHON3="/data/data/com.termux/files/usr/bin/python3"
 PID_FILE="/data/data/com.termux/files/home/.telecom-api/forward.pid"
 TOKEN_FILE="/data/data/com.termux/files/home/.telecom-api/forward_token"
+WATCHDOG_PID_FILE="/data/data/com.termux/files/home/.telecom-api/watchdog.pid"
 
 log() {
     /system/bin/log -t "$LOG_TAG" "$1"
 }
 
-log "看门狗启动"
+# 单实例保护：如果另一个看门狗在运行则退出
+if [ -f "$WATCHDOG_PID_FILE" ]; then
+    OLD_PID=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        log "另一个看门狗实例已在运行 (PID: $OLD_PID)，退出"
+        exit 0
+    fi
+fi
+
+# 确保目录存在并写入 PID
+mkdir -p /data/data/com.termux/files/home/.telecom-api
+echo $$ > "$WATCHDOG_PID_FILE"
+
+log "看门狗启动 (PID: $$)"
 log "监控脚本：$FORWARD_SCRIPT"
 log "检查间隔：${CHECK_INTERVAL}秒"
 
@@ -25,7 +39,9 @@ log "检查间隔：${CHECK_INTERVAL}秒"
 sleep 60
 
 while true; do
-    if pgrep -f "call_sms_forwarding.py" >/dev/null 2>&1; then
+    # 使用精确计数，排除 grep 自身匹配
+    RUNNING_COUNT=$(pgrep -f "call_sms_forwarding.py" 2>/dev/null | wc -l)
+    if [ "$RUNNING_COUNT" -ge 1 ]; then
         sleep "$CHECK_INTERVAL"
     else
         log "⚠ 检测到转发服务未运行，准备启动..."
