@@ -1,0 +1,15 @@
+#!/bin/sh
+# /jffs/scripts/nat-start
+# 在 NAT 规则被(重新)应用时触发
+
+# WireGuard: 防止 FULLCONENAT 劫持 51820 入站流量
+iptables -t nat -I PREROUTING 1 -p udp --dport 51820 -j DNAT --to-destination 192.168.50.1:51820
+
+# koolshare
+/koolshare/bin/ks-nat-start.sh start_nat
+
+# 跨子网设备管理通道（光猫 + 交换机）
+/jffs/scripts/access-networks.sh init
+
+# 注册 cron 定时自检（每分钟检查一次，幂等不重复添加）
+cru a access_networks_check "* * * * * /jffs/scripts/access-networks.sh check"
