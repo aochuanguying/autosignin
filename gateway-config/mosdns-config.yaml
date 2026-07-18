@@ -1,19 +1,90 @@
 log:
   level: warn
 
+api:
+  http: "127.0.0.1:9091"
+
 plugins:
-  - tag: forward_xray
+  # ====== 数据源 ======
+  - tag: cn_domains
+    type: domain_set
+    args:
+      files:
+        - /etc/mosdns/cn-domains.txt
+
+  - tag: proxy_domains
+    type: domain_set
+    args:
+      files:
+        - /etc/mosdns/proxy-domains.txt
+
+  - tag: ad_domains
+    type: domain_set
+    args:
+      files:
+        - /etc/mosdns/ad-domains.txt
+
+  - tag: cn_ip
+    type: ip_set
+    args:
+      files:
+        - /etc/mosdns/cn-ip.txt
+
+  # ====== 公司内网域名 hosts（返回假 IP 触发 nftables 走 office） ======
+  - tag: office_hosts
+    type: hosts
+    args:
+      entries:
+        - "domain:hisense.com 10.19.255.253"
+
+  # ====== 上游 DNS ======
+  - tag: forward_local
     type: forward
     args:
-      concurrent: 1
+      concurrent: 2
       upstreams:
-        - addr: "127.0.0.1:5353"
+        - addr: "223.5.5.5"
+        - addr: "119.29.29.29"
 
+  - tag: forward_remote
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "tls://8.8.8.8"
+        - addr: "tls://1.1.1.1"
+
+  # ====== 处理序列 ======
   - tag: main_sequence
     type: sequence
     args:
-      - exec: $forward_xray
+      # 公司内网域名 → 返回假 IP
+      - exec: $office_hosts
+      - matches: "has_resp"
+        exec: accept
 
+      # 广告域名 → 拒绝
+      - matches: "qname $ad_domains"
+        exec: reject 3
+
+      # 国内域名 → 国内 DNS
+      - matches: "qname $cn_domains"
+        exec: $forward_local
+      - matches: "has_resp"
+        exec: accept
+
+      # 代理域名 → 境外 DNS
+      - matches: "qname $proxy_domains"
+        exec: $forward_remote
+      - matches: "has_resp"
+        exec: accept
+
+      # 兜底 → 国内 DNS，如果返回非国内 IP 则用境外 DNS 重查
+      - exec: $forward_local
+      - matches: "!resp_ip $cn_ip"
+        exec: $forward_remote
+
+  # ====== 入口 ======
   - tag: udp_server
     type: udp_server
     args:

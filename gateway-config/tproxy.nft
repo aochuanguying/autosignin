@@ -24,8 +24,8 @@ table ip xray {
         ip daddr 240.0.0.0/4 return
         ip daddr 255.255.255.255 return
 
-        # DNS 流量走 xray DNS 端口
-        meta l4proto { tcp, udp } th dport 53 tproxy to 127.0.0.1:5353 meta mark set 0x00000001 accept
+        # DNS 流量不劫持（MosDNS 直接监听 53 端口处理）
+        meta l4proto { tcp, udp } th dport 53 return
 
         # 其他所有流量走 xray 代理端口
         meta l4proto { tcp, udp } tproxy to 127.0.0.1:12345 meta mark set 0x00000001 accept
@@ -47,8 +47,10 @@ table ip xray {
         ip daddr 172.16.0.0/12 return
         ip daddr 224.0.0.0/4 return
 
-        # DNS 和其他流量
-        meta l4proto { tcp, udp } th dport 53 meta mark set 0x00000001 accept
+        # DNS 不劫持
+        meta l4proto { tcp, udp } th dport 53 return
+
+        # 其他流量
         meta l4proto { tcp, udp } meta mark set 0x00000001 accept
     }
 }

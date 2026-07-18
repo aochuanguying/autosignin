@@ -4,6 +4,11 @@
     "access": "/var/log/xray/access.log",
     "error": "/var/log/xray/error.log"
   },
+  "dns": {
+    "servers": [
+      "127.0.0.1"
+    ]
+  },
   "inbounds": [
     {
       "tag": "tproxy-in",
@@ -22,42 +27,28 @@
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": [
-          "fakedns+others",
-          "http",
-          "tls",
-          "quic"
-        ]
+        "destOverride": ["http", "tls", "quic"]
       }
     },
     {
       "tag": "http-in",
       "port": 10800,
-      "listen": "192.168.50.2",
+      "listen": "0.0.0.0",
       "protocol": "http",
       "sniffing": {
         "enabled": true,
-        "destOverride": [
-          "http",
-          "tls"
-        ]
+        "destOverride": ["http", "tls"]
       }
     },
     {
       "tag": "socks-in",
       "port": 1080,
-      "listen": "192.168.50.2",
+      "listen": "0.0.0.0",
       "protocol": "socks",
-      "settings": {
-        "auth": "noauth",
-        "udp": true
-      },
+      "settings": { "auth": "noauth", "udp": true },
       "sniffing": {
         "enabled": true,
-        "destOverride": [
-          "http",
-          "tls"
-        ]
+        "destOverride": ["http", "tls"]
       }
     },
     {
@@ -74,17 +65,6 @@
         ],
         "decryption": "none"
       }
-    },
-    {
-      "tag": "dns-in",
-      "port": 5353,
-      "listen": "0.0.0.0",
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "223.5.5.5",
-        "port": 53,
-        "network": "tcp,udp"
-      }
     }
   ],
   "outbounds": [
@@ -92,19 +72,15 @@
       "tag": "proxy",
       "protocol": "vless",
       "settings": {
-        "vnext": [
-          {
-            "address": "154.26.187.89",
-            "port": 443,
-            "users": [
-              {
-                "id": "879fc4cf-28d8-4bb3-8b88-6e0dd53cb940",
-                "encryption": "none",
-                "flow": "xtls-rprx-vision"
-              }
-            ]
-          }
-        ]
+        "vnext": [{
+          "address": "154.26.187.89",
+          "port": 443,
+          "users": [{
+            "id": "879fc4cf-28d8-4bb3-8b88-6e0dd53cb940",
+            "encryption": "none",
+            "flow": "xtls-rprx-vision"
+          }]
+        }]
       },
       "streamSettings": {
         "network": "tcp",
@@ -114,181 +90,51 @@
           "serverName": "cxl.fssc.top",
           "fingerprint": "chrome"
         },
-        "sockopt": {
-          "mark": 255
-        }
+        "sockopt": { "mark": 255 }
       }
     },
     {
       "tag": "office",
       "protocol": "vless",
       "settings": {
-        "vnext": [
-          {
-            "address": "103.94.200.246",
-            "port": 443,
-            "users": [
-              {
-                "id": "0244b6a5-2b80-4ef5-bdba-ef81024e875f",
-                "encryption": "none"
-              }
-            ]
-          }
-        ]
+        "vnext": [{
+          "address": "103.94.200.246",
+          "port": 443,
+          "users": [{
+            "id": "0244b6a5-2b80-4ef5-bdba-ef81024e875f",
+            "encryption": "none"
+          }]
+        }]
       },
       "streamSettings": {
         "network": "xhttp",
         "security": "tls",
-        "tlsSettings": {
-          "serverName": "ws.fssc.top",
-          "fingerprint": "chrome"
-        },
-        "xhttpSettings": {
-          "path": "/xray"
-        },
-        "sockopt": {
-          "mark": 255
-        }
+        "tlsSettings": { "serverName": "ws.fssc.top", "fingerprint": "chrome" },
+        "xhttpSettings": { "path": "/xray" },
+        "sockopt": { "mark": 255 }
       }
     },
     {
       "tag": "direct",
       "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "UseIP"
-      },
-      "streamSettings": {
-        "sockopt": {
-          "mark": 255
-        }
-      }
+      "settings": { "domainStrategy": "AsIs" },
+      "streamSettings": { "sockopt": { "mark": 255 } }
     },
     {
       "tag": "block",
       "protocol": "blackhole",
-      "settings": {
-        "response": {
-          "type": "http"
-        }
-      }
-    },
-    {
-      "tag": "dns-out",
-      "protocol": "dns",
-      "streamSettings": {
-        "sockopt": {
-          "mark": 255
-        }
-      }
+      "settings": { "response": { "type": "http" } }
     }
   ],
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
-      {
-        "type": "field",
-        "inboundTag": [
-          "dns-in"
-        ],
-        "outboundTag": "dns-out"
-      },
-      {
-        "type": "field",
-        "protocol": [
-          "dns"
-        ],
-        "outboundTag": "dns-out"
-      },
-      {
-        "type": "field",
-        "domain": [
-          "domain:hisense.com"
-        ],
-        "outboundTag": "office"
-      },
-      {
-        "type": "field",
-        "ip": [
-          "10.19.0.0/16",
-          "172.16.0.0/16",
-          "10.30.0.0/16",
-          "10.33.0.0/16",
-          "10.16.0.0/16"
-        ],
-        "outboundTag": "office"
-      },
-      {
-        "type": "field",
-        "domain": [
-          "geosite:category-ads-all"
-        ],
-        "outboundTag": "block"
-      },
-      {
-        "type": "field",
-        "domain": [
-          "geosite:cn",
-          "domain:apple.com",
-          "domain:mzstatic.com",
-          "domain:itunes.apple.com",
-          "domain:ai.fssc.top",
-          "domain:fssc.top"
-        ],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "ip": [
-          "geoip:cn",
-          "geoip:private"
-        ],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "port": "0-65535",
-        "outboundTag": "proxy"
-      }
+      { "type": "field", "domain": ["domain:hisense.com"], "outboundTag": "office" },
+      { "type": "field", "ip": ["10.19.0.0/16", "172.16.0.0/16", "10.30.0.0/16", "10.33.0.0/16", "10.16.0.0/16"], "outboundTag": "office" },
+      { "type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block" },
+      { "type": "field", "domain": ["geosite:cn", "domain:apple.com", "domain:mzstatic.com", "domain:itunes.apple.com", "domain:ai.fssc.top", "domain:fssc.top"], "outboundTag": "direct" },
+      { "type": "field", "ip": ["geoip:cn", "geoip:private"], "outboundTag": "direct" },
+      { "type": "field", "port": "0-65535", "outboundTag": "proxy" }
     ]
-  },
-  "dns": {
-    "servers": [
-      {
-        "address": "fakedns",
-        "domains": [
-          "domain:hisense.com"
-        ]
-      },
-      {
-        "address": "https://dns.google/dns-query",
-        "domains": [
-          "geosite:geolocation-!cn"
-        ],
-        "expectIPs": [
-          "geoip:!cn"
-        ]
-      },
-      {
-        "address": "223.5.5.5",
-        "domains": [
-          "geosite:cn",
-          "domain:fssc.top"
-        ],
-        "expectIPs": [
-          "geoip:cn"
-        ]
-      },
-      "223.5.5.5"
-    ]
-  },
-  "fakedns": [
-    {
-      "ipPool": "10.19.252.0/22",
-      "poolSize": 1000
-    },
-    {
-      "ipPool": "fc00::/18",
-      "poolSize": 65535
-    }
-  ]
+  }
 }
