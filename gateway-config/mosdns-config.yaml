@@ -1,0 +1,27 @@
+log:
+  level: warn
+
+plugins:
+  - tag: forward_xray
+    type: forward
+    args:
+      concurrent: 1
+      upstreams:
+        - addr: "127.0.0.1:5353"
+
+  - tag: main_sequence
+    type: sequence
+    args:
+      - exec: $forward_xray
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: "0.0.0.0:53"
+
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: "0.0.0.0:53"
