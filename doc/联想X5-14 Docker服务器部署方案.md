@@ -5,7 +5,7 @@
 - **设备**: 联想 X5-14 IAL 迷你电脑，Intel x86_64，16G RAM，1T HDD，1G 网口，内置电池（UPS 功能）
 - **目标系统**: Debian 13 (Trixie) minimal
 - **角色**: 家庭轻量 Docker 服务器 — 智能家居 + 反向代理 + 服务监控 + 容器管理
-- **IP**: 192.168.50.3（固定 IP，网关/DNS 通过 DHCP 自动获取）
+- **IP**: 192.168.50.10（固定 IP，网关/DNS 通过 DHCP 自动获取）
 - **网段**: 192.168.50.0/24，主路由 192.168.50.1（华硕 BE86U）
 
 **选择 Debian 13 minimal 的理由**:
@@ -50,7 +50,7 @@
 **流量路径说明**:
 1. 所有 DHCP 客户端自动获取网关 192.168.50.2（旁路由）和 DNS 192.168.50.2（MosDNS）
 2. X5_Server 同样通过 DHCP 获取网关/DNS，上网流量经旁路由透明代理
-3. X5_Server 上的服务（HA、NPM 等）通过局域网 IP 192.168.50.3 直接访问，不经代理
+3. X5_Server 上的服务（HA、NPM 等）通过局域网 IP 192.168.50.10 直接访问，不经代理
 
 ---
 
@@ -124,7 +124,51 @@ diskutil eject /dev/disk2
    - **Boot Priority**: USB 设备第一
 4. 保存退出（F10）
 
-### 2.3 安装 Debian 13
+### 2.3 格式化磁盘（清除 Windows 及所有分区）
+
+磁盘当前安装了 Windows 系统并存在多个分区（系统分区、恢复分区、数据分区等），需要在安装 Debian 前彻底清除。
+
+#### 方式一：在 Debian 安装器中清除（推荐）
+
+进入安装器后，在分区步骤选择 **Manual**（手动分区），然后：
+
+1. 选中磁盘（通常显示为 `SCSI (0,0,0) (sda) - 1.0 TB` 或类似）
+2. 选择 **"Yes"** 确认创建新的空分区表（这会删除磁盘上所有 Windows 分区）
+3. 分区表类型选择 **gpt**（GPT 格式，适配 UEFI 启动）
+4. 此时磁盘变为一整块未分配空间，按下面的分区方案创建新分区
+
+#### 方式二：用 USB 启动盘的 Shell 手动清除（更彻底）
+
+如果安装器无法正确识别分区，或你想确保磁盘绝对干净：
+
+1. 从 USB 启动后，在安装器菜单选择 **"Advanced options" → "Rescue mode"** 或按 `Ctrl+Alt+F2` 进入 Shell
+2. 执行以下命令彻底清除分区表：
+
+```bash
+# 确认目标磁盘（通常是 sda 或 nvme0n1）
+lsblk
+
+# 方法 A：用 sgdisk 清除 GPT 和 MBR（推荐）
+sgdisk --zap-all /dev/sda
+
+# 方法 B：用 dd 清除前后扇区（彻底）
+dd if=/dev/zero of=/dev/sda bs=1M count=100     # 清除前 100MB（含 MBR/GPT 头）
+dd if=/dev/zero of=/dev/sda bs=1M seek=$(($(blockdev --getsize64 /dev/sda)/1048576 - 100)) count=100  # 清除尾部备份 GPT
+
+# 方法 C：用 wipefs 清除文件系统签名
+wipefs --all /dev/sda
+
+# 验证磁盘已清空
+lsblk
+fdisk -l /dev/sda
+# 预期：没有任何分区，显示为空白磁盘
+```
+
+3. 输入 `exit` 返回安装器，继续正常安装流程
+
+> **注意**: 以上操作会永久删除磁盘上所有数据（包括 Windows 系统和所有文件），请确认数据已备份或不再需要。
+
+### 2.4 安装 Debian 13
 
 启动后选择 "Graphical Install" 或 "Install"：
 
@@ -144,6 +188,8 @@ diskutil eject /dev/disk2
 
 #### 手动分区方案（1T HDD）
 
+在已清除的磁盘上创建以下分区：
+
 | 分区 | 大小 | 类型 | 文件系统 | 挂载点 |
 |------|------|------|---------|--------|
 | EFI | 512 MB | EFI System Partition | FAT32 | /boot/efi |
@@ -151,6 +197,8 @@ diskutil eject /dev/disk2
 | root | 剩余全部 (~950 GB) | Linux filesystem | ext4 | / |
 
 > 不需要单独分 /home 或 /var，Docker 数据统一放在 /opt/docker。
+> 
+> 如果磁盘上仍显示旧的 Windows 分区，请先按 2.3 节清除后再创建新分区。
 
 ---
 
@@ -184,7 +232,7 @@ cat > /etc/systemd/network/10-static-eth.network << 'EOF'
 Type=ether
 
 [Network]
-Address=192.168.50.3/24
+Address=192.168.50.10/24
 DHCP=ipv4
 
 [DHCPv4]
@@ -201,7 +249,7 @@ systemctl restart systemd-networkd
 ```
 
 **配置说明**:
-- `Address=192.168.50.3/24`: 固定 IP，不随 DHCP 变化
+- `Address=192.168.50.10/24`: 固定 IP，不随 DHCP 变化
 - `DHCP=ipv4`: 启用 DHCP 客户端获取额外信息
 - `UseAddress=false`: 忽略 DHCP 分配的 IP 地址
 - `UseRoutes=true`: 接受 DHCP 分配的默认网关（192.168.50.2，旁路由）
@@ -220,7 +268,7 @@ ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
 ```bash
 # 查看 IP 地址
 ip addr show
-# 预期：看到 192.168.50.3/24
+# 预期：看到 192.168.50.10/24
 
 # ping 网关（旁路由）
 ping -c 3 192.168.50.2
@@ -314,7 +362,7 @@ sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_con
 systemctl restart sshd
 
 # 从开发机复制公钥（在 Mac 上执行）
-# ssh-copy-id root@192.168.50.3
+# ssh-copy-id root@192.168.50.10
 ```
 
 ### 4.6 时区和 NTP 配置
@@ -440,9 +488,13 @@ services:
       - "80:80"
       - "443:443"
       - "81:81"
+      - "8081:80"
+      - "8088:443"
     volumes:
       - /opt/docker/npm/data:/data
       - /opt/docker/npm/letsencrypt:/etc/letsencrypt
+      - /opt/docker/npm/proxy.conf:/etc/nginx/conf.d/include/proxy.conf
+      - /opt/docker/npm/force-ssl.conf:/etc/nginx/conf.d/include/force-ssl.conf
 
   homeassistant:
     image: ghcr.io/home-assistant/home-assistant:stable
@@ -472,6 +524,41 @@ volumes:
 EOF
 ```
 
+**端口映射说明**:
+
+| 宿主机端口 | 容器端口 | 用途 |
+|-----------|---------|------|
+| 80 | 80 | 局域网 HTTP 访问 |
+| 443 | 443 | 局域网 HTTPS 访问 |
+| 81 | 81 | NPM 管理面板 |
+| 8081 | 80 | 外网 HTTP 入口（路由器转发） |
+| 8088 | 443 | 外网 HTTPS 入口（路由器转发） |
+
+> **注意**：NPM 只在容器内 80/443 端口监听，外网 8081/8088 通过 Docker 端口映射到容器内的 80/443。
+
+**自定义 Nginx 配置文件**:
+
+NPM 默认的 proxy.conf 和 force-ssl.conf 不适合非标准端口场景，通过 volume 挂载覆盖：
+
+```bash
+# proxy.conf — 修改 Host 头为 $http_host（含端口），HTTP 版本改为 1.1
+cat > /opt/docker/npm/proxy.conf << 'EOF'
+add_header       X-Served-By $host;
+proxy_set_header Host $http_host;
+    proxy_http_version 1.1;
+    proxy_intercept_errors off;
+proxy_set_header X-Forwarded-Scheme $x_forwarded_scheme;
+proxy_set_header X-Forwarded-Proto  $x_forwarded_proto;
+proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+proxy_set_header X-Real-IP          $remote_addr;
+proxy_pass       $forward_scheme://$server:$port$request_uri;
+EOF
+
+# force-ssl.conf — 修改强制 SSL 跳转目标端口为 8088
+# 从容器中导出原始文件后修改最后一行：
+# return 301 https://$host$request_uri → return 301 https://$host:8088$request_uri
+```
+
 ### 6.3 一键启动所有服务
 
 ```bash
@@ -492,10 +579,10 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 ### 7.1 Portainer — Docker 管理面板
 
-**访问地址**: http://192.168.50.3:9000
+**访问地址**: http://192.168.50.10:9000
 
 **首次配置**:
-1. 浏览器打开 http://192.168.50.3:9000
+1. 浏览器打开 http://192.168.50.10:9000
 2. 设置管理员用户名和密码（密码至少 12 个字符）
 3. **注意**: 必须在容器首次启动后 5 分钟内完成设置，否则需要重建容器：
    ```bash
@@ -508,14 +595,14 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 ### 7.2 Nginx Proxy Manager — 反向代理
 
-**访问地址**: http://192.168.50.3:81
+**访问地址**: http://192.168.50.10:81
 
 **默认登录凭据**:
 - Email: `admin@example.com`
 - Password: `changeme`
 
 **首次配置**:
-1. 浏览器打开 http://192.168.50.3:81
+1. 浏览器打开 http://192.168.50.10:81
 2. 使用默认凭据登录
 3. **立即修改**默认邮箱和密码
 4. 配置反向代理规则（如将域名代理到 Home Assistant 8123 端口等）
@@ -529,10 +616,10 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 ### 7.3 Home Assistant — 智能家居
 
-**访问地址**: http://192.168.50.3:8123
+**访问地址**: http://192.168.50.10:8123
 
 **首次配置**:
-1. 浏览器打开 http://192.168.50.3:8123
+1. 浏览器打开 http://192.168.50.10:8123
 2. 等待初始化向导加载（首次启动可能需要 1-2 分钟）
 3. 创建管理员账户（用户名、密码、姓名）
 4. 设置家庭位置（用于天气和自动化）
@@ -542,10 +629,10 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 ### 7.4 Uptime Kuma — 服务监控
 
-**访问地址**: http://192.168.50.3:3001
+**访问地址**: http://192.168.50.10:3001
 
 **首次配置**:
-1. 浏览器打开 http://192.168.50.3:3001
+1. 浏览器打开 http://192.168.50.10:3001
 2. 创建管理员账户
 
 **建议监控目标**:
@@ -590,10 +677,10 @@ docker compose up -d --force-recreate <服务名>
 
 | 服务 | 地址 | 用途 |
 |------|------|------|
-| Portainer | http://192.168.50.3:9000 | Docker 容器管理 |
-| Nginx Proxy Manager | http://192.168.50.3:81 | 反向代理管理 |
-| Home Assistant | http://192.168.50.3:8123 | 智能家居控制 |
-| Uptime Kuma | http://192.168.50.3:3001 | 服务监控 |
+| Portainer | http://192.168.50.10:9000 | Docker 容器管理 |
+| Nginx Proxy Manager | http://192.168.50.10:81 | 反向代理管理 |
+| Home Assistant | http://192.168.50.10:8123 | 智能家居控制 |
+| Uptime Kuma | http://192.168.50.10:3001 | 服务监控 |
 
 ### 8.2 Docker 常用命令
 
@@ -741,7 +828,7 @@ Level 4: 应用日志
 | 2 | 系统 | `cat /etc/debian_version` | 13.x |
 | 3 | 系统 | `hostname` | x5server |
 | 4 | 时区 | `timedatectl` | Asia/Shanghai, NTP synced |
-| 5 | 网络 | `ip addr show` | 192.168.50.3/24 |
+| 5 | 网络 | `ip addr show` | 192.168.50.10/24 |
 | 6 | 网络 | `ping -c 1 192.168.50.2` | 通，<1ms |
 | 7 | 网络 | `ping -c 1 192.168.50.1` | 通，<1ms |
 | 8 | 网络 | `ping -c 1 baidu.com` | 通 |
@@ -752,10 +839,10 @@ Level 4: 应用日志
 | 13 | Docker | `docker compose version` | v2.x.x |
 | 14 | Docker | `docker info \| grep "Registry Mirrors"` | 显示镜像源 |
 | 15 | 容器 | `docker ps \| wc -l` | 5 (标题+4容器) |
-| 16 | Portainer | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.3:9000` | 200 或 302 |
-| 17 | NPM | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.3:81` | 200 |
-| 18 | HA | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.3:8123` | 200 |
-| 19 | Kuma | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.3:3001` | 200 或 302 |
+| 16 | Portainer | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.10:9000` | 200 或 302 |
+| 17 | NPM | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.10:81` | 200 |
+| 18 | HA | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.10:8123` | 200 |
+| 19 | Kuma | `curl -s -o /dev/null -w '%{http_code}' http://192.168.50.10:3001` | 200 或 302 |
 | 20 | 备份 | `rsync --dry-run /opt/docker/ <NAS>:` | 无报错 |
 
 ---
