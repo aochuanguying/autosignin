@@ -1,0 +1,26 @@
+[Unit]
+Description=Docker container network policy routing (bypass tproxy)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# 添加路由表（幂等）
+ExecStartPre=/bin/bash -c 'grep -q "200 docker-direct" /etc/iproute2/rt_tables || echo "200 docker-direct" >> /etc/iproute2/rt_tables'
+
+# 配置路由和规则
+ExecStart=/bin/bash -c '\
+  ip route replace default via 192.168.50.1 table docker-direct && \
+  ip rule del from 172.17.0.0/16 table docker-direct 2>/dev/null; \
+  ip rule add from 172.17.0.0/16 table docker-direct priority 100'
+
+# 停止时清理规则
+ExecStop=/bin/bash -c '\
+  ip rule del from 172.17.0.0/16 table docker-direct 2>/dev/null; \
+  ip route flush table docker-direct 2>/dev/null'
+
+[Install]
+WantedBy=multi-user.target

@@ -51,6 +51,7 @@ async def start_collector():
     from app.collectors.gateway import collect_gateway
     from app.collectors.nas import collect_nas
     from app.collectors.local import collect_local
+    from app.collectors.ont import collect_ont
     from app.collectors.connectivity import collect_connectivity
 
     global _current_status
@@ -65,6 +66,7 @@ async def start_collector():
                 collect_gateway(),
                 collect_nas(),
                 collect_local(),
+                collect_ont(),
                 collect_connectivity(),
                 return_exceptions=True,
             )
@@ -98,15 +100,22 @@ async def start_collector():
             if isinstance(results[3], dict):
                 devices["x5server"] = results[3]
             else:
-                logger.error(f"X5-Server采集异常: {results[3]}")
+                logger.error(f"X5-Server 采集异常：{results[3]}")
                 devices["x5server"] = {"status": "error", "error": str(results[3])}
 
-            # 连通性
+            # 光猫
             if isinstance(results[4], dict):
-                connectivity = results[4]
+                devices["ont"] = results[4]
             else:
-                logger.error(f"连通性探测异常: {results[4]}")
-                connectivity = {"error": str(results[4])}
+                logger.error(f"光猫采集异常：{results[4]}")
+                devices["ont"] = {"status": "error", "error": str(results[4])}
+
+            # 连通性
+            if isinstance(results[5], dict):
+                connectivity = results[5]
+            else:
+                logger.error(f"连通性探测异常：{results[5]}")
+                connectivity = {"error": str(results[5])}
 
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             _current_status = {

@@ -85,7 +85,7 @@
         .devices-grid {
             grid-column: 1 / -1;
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 14px;
         }
 
@@ -474,7 +474,7 @@
                         <div class="device-name">X5-Server</div>
                         <div class="device-ip">192.168.50.10</div>
                     </div>
-                    <div class="status-dot unknown" id="status-x5server"></div>
+                    <div class="status-dot online" id="status-x5server"></div>
                 </div>
                 <div class="device-metrics">
                     <div class="metric-row">
@@ -499,8 +499,73 @@
                         </div>
                     </div>
                     <div class="metric-row">
+                        <span class="metric-label">温度</span>
+                        <span class="metric-value" id="x5-temp">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">下行</span>
+                        <span class="metric-value traffic-value" id="x5-rx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">上行</span>
+                        <span class="metric-value traffic-value" id="x5-tx">--</span>
+                    </div>
+                    <div class="metric-row">
                         <span class="metric-label">Docker</span>
                         <span class="metric-value docker-summary"><span class="docker-count" id="x5-docker-running">-</span>/<span id="x5-docker-total">-</span> 运行中</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">运行</span>
+                        <span class="metric-value" id="x5-uptime">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 光猫 -->
+            <div class="device-card" id="card-ont">
+                <div class="device-header">
+                    <div>
+                        <div class="device-name">光猫</div>
+                        <div class="device-ip">192.168.1.1</div>
+                    </div>
+                    <div class="status-dot unknown" id="status-ont"></div>
+                </div>
+                <div class="device-metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">光功率</span>
+                        <span class="metric-value" id="ont-rx-power">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">发送功率</span>
+                        <span class="metric-value" id="ont-tx-power">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">电压</span>
+                        <span class="metric-value" id="ont-voltage">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">温度</span>
+                        <span class="metric-value" id="ont-temp">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">WAN</span>
+                        <span class="service-tag unknown" id="ont-wan-status">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">下行</span>
+                        <span class="metric-value traffic-value" id="ont-rx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">上行</span>
+                        <span class="metric-value traffic-value" id="ont-tx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">设备数</span>
+                        <span class="metric-value" id="ont-devices">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">运行</span>
+                        <span class="metric-value" id="ont-uptime">--</span>
                     </div>
                 </div>
             </div>
@@ -694,9 +759,39 @@
             updateProgressBar('x5-mem-bar', x5.mem_percent);
             document.getElementById('x5-disk').textContent = x5.disk_percent !== null && x5.disk_percent !== undefined ? x5.disk_percent + '%' : '--%';
             updateProgressBar('x5-disk-bar', x5.disk_percent);
+            document.getElementById('x5-temp').textContent = x5.cpu_temp !== null && x5.cpu_temp !== undefined ? x5.cpu_temp + '°C' : '--';
+            document.getElementById('x5-rx').innerHTML = formatBytes(x5.rx_rate);
+            document.getElementById('x5-tx').innerHTML = formatBytes(x5.tx_rate);
             const docker = x5.docker || {};
             document.getElementById('x5-docker-running').textContent = docker.running !== undefined ? docker.running : '-';
             document.getElementById('x5-docker-total').textContent = docker.total !== undefined ? docker.total : '-';
+            document.getElementById('x5-uptime').textContent = x5.uptime_seconds !== null && x5.uptime_seconds !== undefined ? formatUptime(x5.uptime_seconds) : '--';
+
+            // 光猫
+            const ont = devices.ont || {};
+            setStatusDot('status-ont', ont.status);
+            document.getElementById('ont-rx-power').textContent = ont.rx_power !== null && ont.rx_power !== undefined ? ont.rx_power + ' dBm' : '--';
+            document.getElementById('ont-tx-power').textContent = ont.tx_power !== null && ont.tx_power !== undefined ? ont.tx_power + ' dBm' : '--';
+            document.getElementById('ont-voltage').textContent = ont.voltage !== null && ont.voltage !== undefined ? ont.voltage.toFixed(2) + ' V' : '--';
+            document.getElementById('ont-temp').textContent = ont.temperature !== null && ont.temperature !== undefined ? ont.temperature + '°C' : '--';
+            
+            // WAN 状态
+            const wanEl = document.getElementById('ont-wan-status');
+            if (ont.wan_status === 'connected') {
+                wanEl.textContent = '已连接';
+                wanEl.className = 'service-tag active';
+            } else if (ont.wan_status === 'disconnected') {
+                wanEl.textContent = '断开';
+                wanEl.className = 'service-tag inactive';
+            } else {
+                wanEl.textContent = '--';
+                wanEl.className = 'service-tag unknown';
+            }
+            
+            document.getElementById('ont-rx').innerHTML = formatBytes(ont.rx_rate);
+            document.getElementById('ont-tx').innerHTML = formatBytes(ont.tx_rate);
+            document.getElementById('ont-devices').textContent = ont.device_count !== null && ont.device_count !== undefined ? ont.device_count : '--';
+            document.getElementById('ont-uptime').textContent = ont.uptime !== null && ont.uptime !== undefined ? ont.uptime : '--';
 
             // 连通性
             const proxy = connectivity.proxy || {};

@@ -36,6 +36,14 @@ class Settings:
     def nas_base_url(self) -> str:
         return f"{self.nas_scheme}://{self.nas_host}:{self.nas_port}"
 
+    # X5-Server
+    x5server_ip: str = os.getenv("X5SERVER_IP", "192.168.50.10")
+    x5server_ssh_password: str = os.getenv("X5SERVER_SSH_PASSWORD", "")
+
+    # 光猫（ONT/ONU）
+    ont_host: str = os.getenv("ONT_HOST", "192.168.1.1")
+    ont_password: str = os.getenv("ONT_PASSWORD", "")
+
     # 连通性探测 URL
     probe_google: str = os.getenv("PROBE_GOOGLE", "https://www.google.com")
     probe_baidu: str = os.getenv("PROBE_BAIDU", "https://www.baidu.com")
