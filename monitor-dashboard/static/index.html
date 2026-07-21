@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Monitor Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-card: #161b22;
+            --bg-card-hover: #1c2129;
+            --border: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --green: #3fb950;
+            --red: #f85149;
+            --yellow: #d29922;
+            --blue: #58a6ff;
+            --purple: #bc8cff;
+            --progress-bg: #21262d;
+            --progress-fill: #238636;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* 顶部区域 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .header-clock {
+            text-align: right;
+        }
+
+        .clock-time {
+            font-size: 28px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--text-primary);
+        }
+
+        .clock-date {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        /* 主内容区 */
+        .main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr auto;
+            gap: 16px;
+            padding: 16px 24px;
+            overflow: hidden;
+        }
+
+        /* 设备卡片区 */
+        .devices-grid {
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+        }
+
+        .device-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .device-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .device-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .device-ip {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-top: 3px;
+        }
+
+        .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+        .status-dot.offline { background: var(--red); box-shadow: 0 0 6px var(--red); }
+        .status-dot.unknown { background: var(--yellow); }
+
+        .device-metrics {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+        }
+
+        .metric-value {
+            color: var(--text-primary);
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .progress-bar {
+            width: 80px;
+            height: 6px;
+            background: var(--progress-bg);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-left: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        .progress-fill.low { background: var(--green); }
+        .progress-fill.medium { background: var(--yellow); }
+        .progress-fill.high { background: var(--red); }
+
+        .metric-with-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .service-tag {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+        }
+
+        .service-tag.active { background: #0f3d1e; color: var(--green); }
+        .service-tag.inactive { background: #3d1f1f; color: var(--red); }
+        .service-tag.unknown { background: #2d2400; color: var(--yellow); }
+
+        /* 连通性面板 */
+        .connectivity-panel {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            align-items: center;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 24px;
+        }
+
+        .conn-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .conn-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .conn-dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+        .conn-dot.timeout { background: var(--red); box-shadow: 0 0 8px var(--red); }
+        .conn-dot.error { background: var(--red); }
+        .conn-dot.unknown { background: var(--yellow); }
+
+        .conn-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .conn-latency {
+            font-size: 13px;
+            color: var(--text-primary);
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+            min-width: 55px;
+        }
+
+        .conn-separator {
+            width: 1px;
+            height: 24px;
+            background: var(--border);
+        }
+
+        /* 底部状态栏 */
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 24px;
+            border-top: 1px solid var(--border);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .footer-connection {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .footer-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .footer-dot.connected { background: var(--green); }
+        .footer-dot.disconnected { background: var(--red); }
+
+        /* Docker 容器列表 */
+        .docker-summary {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .docker-count {
+            color: var(--blue);
+            font-weight: 600;
+        }
+
+        /* 流量显示 */
+        .traffic-value {
+            font-size: 12px;
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .traffic-value .unit {
+            color: var(--text-muted);
+            font-size: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部 -->
+    <div class="header">
+        <div class="header-title">Server Monitor</div>
+        <div class="header-clock">
+            <div class="clock-time" id="clock-time">--:--:--</div>
+            <div class="clock-date" id="clock-date">----年--月--日 星期-</div>
+        </div>
+    </div>
+
+    <!-- 主内容 -->
+    <div class="main">
+        <!-- 设备卡片 -->
+        <div class="devices-grid">
+            <!-- 主路由 -->
+            <div class="device-card" id="card-router">
+                <div class="device-header">
+                    <div>
+                        <div class="device-name">主路由 BE86U</div>
+                        <div class="device-ip">192.168.50.1</div>
+                    </div>
+                    <div class="status-dot unknown" id="status-router"></div>
+                </div>
+                <div class="device-metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">CPU</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="router-cpu">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="router-cpu-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">内存</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="router-mem">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="router-mem-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">公网IP</span>
+                        <span class="metric-value" id="router-wan-ip">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">温度</span>
+                        <span class="metric-value" id="router-temp">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">下行</span>
+                        <span class="metric-value traffic-value" id="router-rx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">上行</span>
+                        <span class="metric-value traffic-value" id="router-tx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">设备数</span>
+                        <span class="metric-value" id="router-clients">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">运行</span>
+                        <span class="metric-value" id="router-uptime">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 旁路由 -->
+            <div class="device-card" id="card-gateway">
+                <div class="device-header">
+                    <div>
+                        <div class="device-name">旁路由 G31</div>
+                        <div class="device-ip">192.168.50.2</div>
+                    </div>
+                    <div class="status-dot unknown" id="status-gateway"></div>
+                </div>
+                <div class="device-metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">CPU</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="gateway-cpu">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="gateway-cpu-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">内存</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="gateway-mem">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="gateway-mem-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">温度</span>
+                        <span class="metric-value" id="gateway-temp">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">连接数</span>
+                        <span class="metric-value" id="gateway-conntrack">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">下行</span>
+                        <span class="metric-value traffic-value" id="gateway-rx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">上行</span>
+                        <span class="metric-value traffic-value" id="gateway-tx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">服务</span>
+                        <div>
+                            <span class="service-tag unknown" id="gateway-xray">Xray</span>
+                            <span class="service-tag unknown" id="gateway-mosdns">MosDNS</span>
+                            <span class="service-tag unknown" id="gateway-nginx">Nginx</span>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">运行</span>
+                        <span class="metric-value" id="gateway-uptime">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NAS -->
+            <div class="device-card" id="card-nas">
+                <div class="device-header">
+                    <div>
+                        <div class="device-name">NAS DS218+</div>
+                        <div class="device-ip">192.168.50.50</div>
+                    </div>
+                    <div class="status-dot unknown" id="status-nas"></div>
+                </div>
+                <div class="device-metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">CPU</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="nas-cpu">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="nas-cpu-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">内存</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="nas-mem">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="nas-mem-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">磁盘</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="nas-disk">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="nas-disk-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">系统温度</span>
+                        <span class="metric-value" id="nas-sys-temp">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">硬盘温度</span>
+                        <span class="metric-value" id="nas-disk-temp">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">下行</span>
+                        <span class="metric-value traffic-value" id="nas-rx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">上行</span>
+                        <span class="metric-value traffic-value" id="nas-tx">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">卷状态</span>
+                        <span class="service-tag unknown" id="nas-volume-status">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">运行</span>
+                        <span class="metric-value" id="nas-uptime">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- X5-Server -->
+            <div class="device-card" id="card-x5server">
+                <div class="device-header">
+                    <div>
+                        <div class="device-name">X5-Server</div>
+                        <div class="device-ip">192.168.50.10</div>
+                    </div>
+                    <div class="status-dot unknown" id="status-x5server"></div>
+                </div>
+                <div class="device-metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">CPU</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="x5-cpu">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="x5-cpu-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">内存</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="x5-mem">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="x5-mem-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">磁盘</span>
+                        <div class="metric-with-bar">
+                            <span class="metric-value" id="x5-disk">--%</span>
+                            <div class="progress-bar"><div class="progress-fill low" id="x5-disk-bar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Docker</span>
+                        <span class="metric-value docker-summary"><span class="docker-count" id="x5-docker-running">-</span>/<span id="x5-docker-total">-</span> 运行中</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 连通性面板 -->
+        <div class="connectivity-panel">
+            <div class="conn-item">
+                <div class="conn-dot unknown" id="conn-proxy-dot"></div>
+                <span class="conn-label">翻墙</span>
+                <span class="conn-latency" id="conn-proxy-latency">--</span>
+            </div>
+            <div class="conn-separator"></div>
+            <div class="conn-item">
+                <div class="conn-dot unknown" id="conn-direct-dot"></div>
+                <span class="conn-label">直连</span>
+                <span class="conn-latency" id="conn-direct-latency">--</span>
+            </div>
+            <div class="conn-separator"></div>
+            <div class="conn-item">
+                <div class="conn-dot unknown" id="conn-office-dot"></div>
+                <span class="conn-label">内网</span>
+                <span class="conn-latency" id="conn-office-latency">--</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="footer">
+        <div class="footer-connection">
+            <div class="footer-dot disconnected" id="footer-conn-dot"></div>
+            <span id="footer-conn-text">未连接</span>
+        </div>
+        <div id="footer-update-time">最后更新: --</div>
+    </div>
+
+    <script>
+        // ========== 时钟 ==========
+        const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
+
+        function updateClock() {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, '0');
+            const m = String(now.getMinutes()).padStart(2, '0');
+            const s = String(now.getSeconds()).padStart(2, '0');
+            document.getElementById('clock-time').textContent = `${h}:${m}:${s}`;
+
+            const y = now.getFullYear();
+            const mon = String(now.getMonth() + 1).padStart(2, '0');
+            const d = String(now.getDate()).padStart(2, '0');
+            const w = weekDays[now.getDay()];
+            document.getElementById('clock-date').textContent = `${y}年${mon}月${d}日 星期${w}`;
+        }
+        updateClock();
+        setInterval(updateClock, 1000);
+
+        // ========== 工具函数 ==========
+        function formatBytes(bytesPerSec) {
+            if (bytesPerSec === null || bytesPerSec === undefined) return '--';
+            if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} <span class="unit">B/s</span>`;
+            if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} <span class="unit">KB/s</span>`;
+            return `${(bytesPerSec / 1024 / 1024).toFixed(2)} <span class="unit">MB/s</span>`;
+        }
+
+        function getProgressClass(percent) {
+            if (percent === null || percent === undefined) return 'low';
+            if (percent >= 80) return 'high';
+            if (percent >= 50) return 'medium';
+            return 'low';
+        }
+
+        function formatUptime(seconds) {
+            if (!seconds) return '--';
+            const d = Math.floor(seconds / 86400);
+            const h = Math.floor((seconds % 86400) / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            if (d > 0) return d + '天' + h + '时';
+            if (h > 0) return h + '时' + m + '分';
+            return m + '分';
+        }
+
+        function updateProgressBar(barId, percent) {
+            const bar = document.getElementById(barId);
+            if (!bar) return;
+            const val = percent !== null && percent !== undefined ? percent : 0;
+            bar.style.width = val + '%';
+            bar.className = 'progress-fill ' + getProgressClass(percent);
+        }
+
+        function setServiceTag(elementId, status) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (status === 'active') {
+                el.className = 'service-tag active';
+            } else if (status === 'inactive' || status === 'failed') {
+                el.className = 'service-tag inactive';
+            } else {
+                el.className = 'service-tag unknown';
+            }
+        }
+
+        function setStatusDot(elementId, status) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            el.className = 'status-dot ' + (status === 'online' ? 'online' : status === 'offline' ? 'offline' : 'unknown');
+        }
+
+        function setConnDot(elementId, status) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            el.className = 'conn-dot ' + (status === 'ok' ? 'ok' : status === 'timeout' ? 'timeout' : status === 'error' ? 'error' : 'unknown');
+        }
+
+        // ========== 数据更新 ==========
+        function updateDashboard(data) {
+            if (!data) return;
+
+            const devices = data.devices || {};
+            const connectivity = data.connectivity || {};
+
+            // 主路由
+            const router = devices.router || {};
+            setStatusDot('status-router', router.status);
+            document.getElementById('router-cpu').textContent = router.cpu_percent !== null && router.cpu_percent !== undefined ? router.cpu_percent + '%' : '--%';
+            updateProgressBar('router-cpu-bar', router.cpu_percent);
+            document.getElementById('router-mem').textContent = router.mem_percent !== null && router.mem_percent !== undefined ? router.mem_percent + '%' : '--%';
+            updateProgressBar('router-mem-bar', router.mem_percent);
+            document.getElementById('router-wan-ip').textContent = router.wan_ip || '--';
+            document.getElementById('router-temp').textContent = router.cpu_temp !== null && router.cpu_temp !== undefined ? router.cpu_temp + '°C' : '--';
+            document.getElementById('router-rx').innerHTML = formatBytes(router.rx_rate);
+            document.getElementById('router-tx').innerHTML = formatBytes(router.tx_rate);
+            document.getElementById('router-clients').textContent = router.clients !== null && router.clients !== undefined ? router.clients : '--';
+            document.getElementById('router-uptime').textContent = router.uptime !== null && router.uptime !== undefined ? formatUptime(router.uptime) : '--';
+
+            // 旁路由
+            const gw = devices.gateway || {};
+            setStatusDot('status-gateway', gw.status);
+            document.getElementById('gateway-cpu').textContent = gw.cpu_percent !== null && gw.cpu_percent !== undefined ? gw.cpu_percent + '%' : '--%';
+            updateProgressBar('gateway-cpu-bar', gw.cpu_percent);
+            document.getElementById('gateway-mem').textContent = gw.mem_percent !== null && gw.mem_percent !== undefined ? gw.mem_percent + '%' : '--%';
+            updateProgressBar('gateway-mem-bar', gw.mem_percent);
+            document.getElementById('gateway-temp').textContent = gw.cpu_temp !== null && gw.cpu_temp !== undefined ? gw.cpu_temp + '°C' : '--';
+            const ct = gw.conntrack_count;
+            const ctMax = gw.conntrack_max;
+            document.getElementById('gateway-conntrack').textContent = ct !== null && ct !== undefined ? `${ct.toLocaleString()}` + (ctMax ? ` / ${ctMax.toLocaleString()}` : '') : '--';
+            document.getElementById('gateway-rx').innerHTML = formatBytes(gw.rx_rate);
+            document.getElementById('gateway-tx').innerHTML = formatBytes(gw.tx_rate);
+            setServiceTag('gateway-xray', gw.xray_status);
+            setServiceTag('gateway-mosdns', gw.mosdns_status);
+            setServiceTag('gateway-nginx', gw.nginx_status);
+            document.getElementById('gateway-uptime').textContent = gw.uptime !== null && gw.uptime !== undefined ? formatUptime(gw.uptime) : '--';
+
+            // NAS
+            const nas = devices.nas || {};
+            setStatusDot('status-nas', nas.status);
+            document.getElementById('nas-cpu').textContent = nas.cpu_percent !== null && nas.cpu_percent !== undefined ? nas.cpu_percent + '%' : '--%';
+            updateProgressBar('nas-cpu-bar', nas.cpu_percent);
+            document.getElementById('nas-mem').textContent = nas.mem_percent !== null && nas.mem_percent !== undefined ? nas.mem_percent + '%' : '--%';
+            updateProgressBar('nas-mem-bar', nas.mem_percent);
+            document.getElementById('nas-disk').textContent = nas.disk_used_percent !== null && nas.disk_used_percent !== undefined ? nas.disk_used_percent + '%' : '--%';
+            updateProgressBar('nas-disk-bar', nas.disk_used_percent);
+            document.getElementById('nas-sys-temp').textContent = nas.sys_temp !== null && nas.sys_temp !== undefined ? nas.sys_temp + '°C' : '--';
+            const d1 = nas.disk1_temp, d2 = nas.disk2_temp;
+            let diskTempText = '--';
+            if (d1 !== null && d1 !== undefined) {
+                diskTempText = d1 + '°C';
+                if (d2 !== null && d2 !== undefined) diskTempText += ' / ' + d2 + '°C';
+            }
+            document.getElementById('nas-disk-temp').textContent = diskTempText;
+            document.getElementById('nas-rx').innerHTML = formatBytes(nas.rx_rate);
+            document.getElementById('nas-tx').innerHTML = formatBytes(nas.tx_rate);
+            const volEl = document.getElementById('nas-volume-status');
+            if (nas.volume_status === 'normal') {
+                volEl.textContent = 'normal';
+                volEl.className = 'service-tag active';
+            } else if (nas.volume_status) {
+                volEl.textContent = nas.volume_status;
+                volEl.className = 'service-tag inactive';
+            } else {
+                volEl.textContent = '--';
+                volEl.className = 'service-tag unknown';
+            }
+            document.getElementById('nas-uptime').textContent = nas.uptime !== null && nas.uptime !== undefined ? formatUptime(nas.uptime) : '--';
+
+            // X5-Server
+            const x5 = devices.x5server || {};
+            setStatusDot('status-x5server', x5.status);
+            document.getElementById('x5-cpu').textContent = x5.cpu_percent !== null && x5.cpu_percent !== undefined ? x5.cpu_percent + '%' : '--%';
+            updateProgressBar('x5-cpu-bar', x5.cpu_percent);
+            document.getElementById('x5-mem').textContent = x5.mem_percent !== null && x5.mem_percent !== undefined ? x5.mem_percent + '%' : '--%';
+            updateProgressBar('x5-mem-bar', x5.mem_percent);
+            document.getElementById('x5-disk').textContent = x5.disk_percent !== null && x5.disk_percent !== undefined ? x5.disk_percent + '%' : '--%';
+            updateProgressBar('x5-disk-bar', x5.disk_percent);
+            const docker = x5.docker || {};
+            document.getElementById('x5-docker-running').textContent = docker.running !== undefined ? docker.running : '-';
+            document.getElementById('x5-docker-total').textContent = docker.total !== undefined ? docker.total : '-';
+
+            // 连通性
+            const proxy = connectivity.proxy || {};
+            setConnDot('conn-proxy-dot', proxy.status);
+            document.getElementById('conn-proxy-latency').textContent = proxy.latency_ms !== null && proxy.latency_ms !== undefined ? proxy.latency_ms + 'ms' : (proxy.status === 'timeout' ? '超时' : '--');
+
+            const direct = connectivity.direct || {};
+            setConnDot('conn-direct-dot', direct.status);
+            document.getElementById('conn-direct-latency').textContent = direct.latency_ms !== null && direct.latency_ms !== undefined ? direct.latency_ms + 'ms' : (direct.status === 'timeout' ? '超时' : '--');
+
+            const office = connectivity.office || {};
+            setConnDot('conn-office-dot', office.status);
+            document.getElementById('conn-office-latency').textContent = office.latency_ms !== null && office.latency_ms !== undefined ? office.latency_ms + 'ms' : (office.status === 'timeout' ? '超时' : '--');
+
+            // 更新时间
+            if (data.timestamp) {
+                document.getElementById('footer-update-time').textContent = '最后更新: ' + data.timestamp;
+            }
+        }
+
+        // ========== SSE 连接 ==========
+        let eventSource = null;
+        let reconnectTimer = null;
+
+        function setConnectionStatus(connected) {
+            const dot = document.getElementById('footer-conn-dot');
+            const text = document.getElementById('footer-conn-text');
+            if (connected) {
+                dot.className = 'footer-dot connected';
+                text.textContent = '已连接';
+            } else {
+                dot.className = 'footer-dot disconnected';
+                text.textContent = '未连接';
+            }
+        }
+
+        function connectSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource('/api/events');
+
+            eventSource.addEventListener('status', function(e) {
+                try {
+                    const data = JSON.parse(e.data);
+                    updateDashboard(data);
+                    setConnectionStatus(true);
+                } catch (err) {
+                    console.error('解析数据失败:', err);
+                }
+            });
+
+            eventSource.addEventListener('ping', function() {
+                // 心跳，保持连接状态
+                setConnectionStatus(true);
+            });
+
+            eventSource.onopen = function() {
+                setConnectionStatus(true);
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            };
+
+            eventSource.onerror = function() {
+                setConnectionStatus(false);
+                eventSource.close();
+                // 5 秒后自动重连
+                reconnectTimer = setTimeout(connectSSE, 5000);
+            };
+        }
+
+        // 启动连接
+        connectSSE();
+    </script>
+</body>
+</html>

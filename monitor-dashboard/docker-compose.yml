@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  monitor-dashboard:
+    build: .
+    container_name: monitor-dashboard
+    restart: unless-stopped
+    ports:
+      - "3030:3030"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ~/.ssh/id_rsa:/root/.ssh/id_rsa:ro
+      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Shanghai
