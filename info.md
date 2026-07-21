@@ -41,16 +41,33 @@
 | VLESS | 16825 | 16825 | 192.168.50.2 | BOTH |
 | Drive | 6690 | 6690 | 192.168.50.50 | BOTH |
 
-> 注：SSH 端口 120 已删除（不再暴露到公网）
+> 注：SSH 端口 120 已删除（不再暴露到公网）；路由器管理端口已改为 9443
 
-## NPM 反向代理规则 (X5_Server)
+## NPM 反向代理 (X5_Server)
 
 NPM 管理面板：http://192.168.50.10:81
+
+### NPM 网络架构
+
+NPM 使用 `network_mode: host` 运行，直接监听宿主机 80/443/81 端口。
+
+**端口转发回包问题**：X5_Server 默认网关是旁路由（192.168.50.2），端口转发的回包经过旁路由时会被 TPROXY 劫持导致丢包。
+
+**解决方案**（配置在 X5_Server 本机，不污染旁路由）：
+1. iptables PREROUTING：入站 8088 重定向到本机 443，8081 重定向到 80
+2. 策略路由：源端口 443/80 的回包走 table 100（网关 192.168.50.1 主路由直出）
+
+已通过 systemd 服务 `npm-routing.service` 持久化：
+```bash
+systemctl status npm-routing   # 查看状态
+```
+
+### 代理规则
 
 | 域名 | 外部端口 | 协议 | 上游地址 | 说明 |
 |------|---------|------|---------|------|
 | hxfssc.com | 8088 | HTTPS | https://192.168.50.50:8088 | 群晖 DSM |
-| router.hxfssc.com | 8088 | HTTPS | https://192.168.50.1:8443 | 路由器管理 |
+| router.hxfssc.com | 8088 | HTTPS | https://192.168.50.1:9443 | 路由器管理 |
 | ha.hxfssc.com | 8088 | HTTPS | http://192.168.50.10:8123 | Home Assistant |
 | bt.hxfssc.com | 8088 | HTTPS | http://192.168.50.50:9085 | qBittorrent |
 | yqad.hxfssc.com | 8088 | HTTPS | http://192.168.50.50:3000 | 一汽奥迪 |
@@ -61,30 +78,23 @@ NPM 管理面板：http://192.168.50.10:81
 - 签发方式：Let's Encrypt DNS Challenge (阿里云 DNS)
 - NPM 自动续期，无需额外 acme 容器
 
-### NPM 自定义配置说明
+### NPM 自定义配置
 
-NPM 默认的 proxy.conf 不适合非标准端口反代场景，已通过 volume 挂载覆盖：
+通过 volume 挂载覆盖 NPM 默认配置：
 
-- `/opt/docker/npm/proxy.conf` → 修改 Host 头为 `$http_host`（含端口），HTTP 版本改为 1.1
-- `/opt/docker/npm/force-ssl.conf` → 修改强制 SSL 跳转目标为 `https://$host:8088`
-
-### Docker Compose 端口映射逻辑
-
-```
-外网 8081 → Docker 8081:80 → NPM 容器内 80 端口 (HTTP)
-外网 8088 → Docker 8088:443 → NPM 容器内 443 端口 (HTTPS)
-```
-
-NPM 面板只监听 80/443，通过 Docker 端口映射实现外部非标准端口访问。
+- `/opt/docker/npm/proxy.conf` → Host 头改为 `$http_host`（含端口）、关闭 proxy_intercept_errors
+- `/opt/docker/npm/force-ssl.conf` → 强制 SSL 跳转目标改为 `https://$host:8088`
 
 ## 外部访问 URL 映射表
 
 | 外部访问 URL | 内网目标 | 服务 |
 |-------------|---------|------|
 | https://hxfssc.com:8088 | 192.168.50.50:8088 | 群晖 DSM |
-| https://router.hxfssc.com:8088 | 192.168.50.1:8443 | 路由器管理 |
+| https://router.hxfssc.com:8088 | 192.168.50.1:9443 | 路由器管理 |
 | https://ha.hxfssc.com:8088 | 192.168.50.10:8123 | Home Assistant |
 | https://bt.hxfssc.com:8088 | 192.168.50.50:9085 | qBittorrent |
+| https://yqad.hxfssc.com:8088 | 192.168.50.50:3000 | 一汽奥迪 |
+| vless://公网IP:16825 | 192.168.50.2:16825 | VLESS 代理 |
 | https://yqad.hxfssc.com:8088 | 192.168.50.50:3000 | 一汽奥迪 |
 | vless://公网IP:16825 | 192.168.50.2:16825 | VLESS 代理 |
 
