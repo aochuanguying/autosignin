@@ -32,8 +32,7 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
-            height: 100vh;
-            overflow: hidden;
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
         }
@@ -73,20 +72,20 @@
         /* 主内容区 */
         .main {
             flex: 1;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            grid-template-rows: 1fr auto;
+            display: flex;
+            flex-direction: column;
             gap: 16px;
             padding: 16px 24px;
-            overflow: hidden;
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
-        /* 设备卡片区 */
+        /* 设备卡片区 - 等高网格，宽度自适应 */
         .devices-grid {
-            grid-column: 1 / -1;
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 14px;
+            align-items: stretch;
         }
 
         .device-card {
@@ -192,7 +191,6 @@
 
         /* 连通性面板 */
         .connectivity-panel {
-            grid-column: 1 / -1;
             display: flex;
             gap: 20px;
             justify-content: center;
@@ -525,31 +523,31 @@
             <div class="device-card" id="card-ont">
                 <div class="device-header">
                     <div>
-                        <div class="device-name">光猫</div>
+                        <div class="device-name">光猫 VSOL</div>
                         <div class="device-ip">192.168.1.1</div>
                     </div>
                     <div class="status-dot unknown" id="status-ont"></div>
                 </div>
                 <div class="device-metrics">
                     <div class="metric-row">
-                        <span class="metric-label">光功率</span>
+                        <span class="metric-label">RX 光功率</span>
                         <span class="metric-value" id="ont-rx-power">--</span>
                     </div>
                     <div class="metric-row">
-                        <span class="metric-label">发送功率</span>
+                        <span class="metric-label">TX 光功率</span>
                         <span class="metric-value" id="ont-tx-power">--</span>
                     </div>
                     <div class="metric-row">
-                        <span class="metric-label">电压</span>
-                        <span class="metric-value" id="ont-voltage">--</span>
-                    </div>
-                    <div class="metric-row">
-                        <span class="metric-label">温度</span>
-                        <span class="metric-value" id="ont-temp">--</span>
+                        <span class="metric-label">CPU</span>
+                        <span class="metric-value" id="ont-cpu">--</span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">WAN</span>
                         <span class="service-tag unknown" id="ont-wan-status">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">LAN</span>
+                        <span class="service-tag unknown" id="ont-lan-status">--</span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">下行</span>
@@ -561,11 +559,36 @@
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">设备数</span>
-                        <span class="metric-value" id="ont-devices">--</span>
+                        <span class="metric-value" id="ont-arp-count">--</span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">运行</span>
                         <span class="metric-value" id="ont-uptime">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 交换机 -->
+            <div class="device-card" id="card-switch">
+                <div class="device-header">
+                    <div>
+                        <div class="device-name">交换机 SKS3200</div>
+                        <div class="device-ip">192.168.10.12</div>
+                    </div>
+                    <div class="status-dot unknown" id="status-switch"></div>
+                </div>
+                <div class="device-metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">温度</span>
+                        <span class="metric-value" id="switch-temp">--</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">端口</span>
+                        <span class="metric-value" id="switch-ports">--</span>
+                    </div>
+                    <div class="metric-row" style="flex-wrap:wrap;gap:4px;">
+                        <span class="metric-label" style="width:100%">端口状态</span>
+                        <div id="switch-port-dots" style="display:flex;gap:3px;flex-wrap:wrap;"></div>
                     </div>
                 </div>
             </div>
@@ -770,28 +793,43 @@
             // 光猫
             const ont = devices.ont || {};
             setStatusDot('status-ont', ont.status);
-            document.getElementById('ont-rx-power').textContent = ont.rx_power !== null && ont.rx_power !== undefined ? ont.rx_power + ' dBm' : '--';
-            document.getElementById('ont-tx-power').textContent = ont.tx_power !== null && ont.tx_power !== undefined ? ont.tx_power + ' dBm' : '--';
-            document.getElementById('ont-voltage').textContent = ont.voltage !== null && ont.voltage !== undefined ? ont.voltage.toFixed(2) + ' V' : '--';
-            document.getElementById('ont-temp').textContent = ont.temperature !== null && ont.temperature !== undefined ? ont.temperature + '°C' : '--';
-            
-            // WAN 状态
-            const wanEl = document.getElementById('ont-wan-status');
-            if (ont.wan_status === 'connected') {
-                wanEl.textContent = '已连接';
-                wanEl.className = 'service-tag active';
-            } else if (ont.wan_status === 'disconnected') {
-                wanEl.textContent = '断开';
-                wanEl.className = 'service-tag inactive';
-            } else {
-                wanEl.textContent = '--';
-                wanEl.className = 'service-tag unknown';
-            }
-            
+            document.getElementById('ont-rx-power').textContent = ont.rx_power_dbm !== null && ont.rx_power_dbm !== undefined ? ont.rx_power_dbm + ' dBm' : '--';
+            document.getElementById('ont-tx-power').textContent = ont.tx_power_dbm !== null && ont.tx_power_dbm !== undefined ? ont.tx_power_dbm + ' dBm' : '--';
+            document.getElementById('ont-cpu').textContent = ont.cpu_percent !== null && ont.cpu_percent !== undefined ? ont.cpu_percent + '%' : '--';
+            const ontWan = document.getElementById('ont-wan-status');
+            if (ont.wan_status === 'up') { ontWan.textContent = 'UP'; ontWan.className = 'service-tag active'; }
+            else if (ont.wan_status === 'down') { ontWan.textContent = 'DOWN'; ontWan.className = 'service-tag inactive'; }
+            else { ontWan.textContent = '--'; ontWan.className = 'service-tag unknown'; }
+            const ontLan = document.getElementById('ont-lan-status');
+            if (ont.lan_status === 'up') { ontLan.textContent = 'UP'; ontLan.className = 'service-tag active'; }
+            else if (ont.lan_status === 'down') { ontLan.textContent = 'DOWN'; ontLan.className = 'service-tag inactive'; }
+            else { ontLan.textContent = '--'; ontLan.className = 'service-tag unknown'; }
             document.getElementById('ont-rx').innerHTML = formatBytes(ont.rx_rate);
             document.getElementById('ont-tx').innerHTML = formatBytes(ont.tx_rate);
-            document.getElementById('ont-devices').textContent = ont.device_count !== null && ont.device_count !== undefined ? ont.device_count : '--';
-            document.getElementById('ont-uptime').textContent = ont.uptime !== null && ont.uptime !== undefined ? ont.uptime : '--';
+            document.getElementById('ont-arp-count').textContent = ont.arp_count !== null && ont.arp_count !== undefined ? ont.arp_count : '--';
+            document.getElementById('ont-uptime').textContent = ont.uptime !== null && ont.uptime !== undefined ? formatUptime(ont.uptime) : '--';
+
+            // 交换机
+            const sw = devices.switch || {};
+            setStatusDot('status-switch', sw.status);
+            document.getElementById('switch-temp').textContent = sw.temperature !== null && sw.temperature !== undefined ? sw.temperature + '°C' : '--';
+            document.getElementById('switch-ports').textContent = sw.ports_up !== null && sw.ports_up !== undefined ? sw.ports_up + '/' + sw.ports_total + ' 在线' : '--';
+            // 端口状态点阵
+            const dotsContainer = document.getElementById('switch-port-dots');
+            if (dotsContainer && sw.ports && sw.ports.length) {
+                dotsContainer.innerHTML = sw.ports.map(p => {
+                    const isUp = !p.link.includes('Down');
+                    let color = 'var(--text-muted)';
+                    if (isUp) {
+                        if (p.link.includes('2500')) color = 'var(--green)';
+                        else if (p.link.includes('1000')) color = 'var(--blue)';
+                        else if (p.link.includes('100')) color = 'var(--yellow)';
+                        else color = 'var(--green)';
+                    }
+                    const speed = p.link.replace('MbpsFull','M').replace('MbpsHalf','M');
+                    return '<div title="P' + p.id + ': ' + (isUp ? speed : 'Down') + '" style="width:16px;height:16px;border-radius:3px;background:' + color + ';font-size:8px;display:flex;align-items:center;justify-content:center;color:#000;font-weight:bold;">' + p.id + '</div>';
+                }).join('');
+            }
 
             // 连通性
             const proxy = connectivity.proxy || {};

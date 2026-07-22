@@ -42,7 +42,14 @@ class Settings:
 
     # 光猫（ONT/ONU）
     ont_host: str = os.getenv("ONT_HOST", "192.168.1.1")
+    ont_telnet_port: int = int(os.getenv("ONT_TELNET_PORT", "23"))
+    ont_user: str = os.getenv("ONT_USER", "admin")
     ont_password: str = os.getenv("ONT_PASSWORD", "")
+
+    # 交换机
+    switch_host: str = os.getenv("SWITCH_HOST", "192.168.10.12")
+    switch_user: str = os.getenv("SWITCH_USER", "admin")
+    switch_password: str = os.getenv("SWITCH_PASSWORD", "admin")
 
     # 连通性探测 URL
     probe_google: str = os.getenv("PROBE_GOOGLE", "https://www.google.com")

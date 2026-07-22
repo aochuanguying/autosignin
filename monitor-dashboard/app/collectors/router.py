@@ -64,7 +64,7 @@ async def collect_router() -> dict:
             username=settings.router_ssh_user,
             password=settings.router_ssh_password,
             known_hosts=None,
-            connect_timeout=settings.ssh_timeout,
+            connect_timeout=10,
         ) as conn:
             # 一次性执行所有命令，减少 SSH 开销
             cmd = (
@@ -77,7 +77,7 @@ async def collect_router() -> dict:
                 "cat /proc/uptime; "
                 "cat /sys/class/thermal/thermal_zone0/temp"
             )
-            r = await conn.run(cmd, timeout=settings.ssh_timeout)
+            r = await conn.run(cmd, timeout=10)
 
             if r.exit_status == 0 and r.stdout.strip():
                 lines = r.stdout.strip().split("\n")

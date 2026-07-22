@@ -52,6 +52,7 @@ async def start_collector():
     from app.collectors.nas import collect_nas
     from app.collectors.local import collect_local
     from app.collectors.ont import collect_ont
+    from app.collectors.switch import collect_switch
     from app.collectors.connectivity import collect_connectivity
 
     global _current_status
@@ -67,6 +68,7 @@ async def start_collector():
                 collect_nas(),
                 collect_local(),
                 collect_ont(),
+                collect_switch(),
                 collect_connectivity(),
                 return_exceptions=True,
             )
@@ -110,12 +112,19 @@ async def start_collector():
                 logger.error(f"光猫采集异常：{results[4]}")
                 devices["ont"] = {"status": "error", "error": str(results[4])}
 
-            # 连通性
+            # 交换机
             if isinstance(results[5], dict):
-                connectivity = results[5]
+                devices["switch"] = results[5]
             else:
-                logger.error(f"连通性探测异常：{results[5]}")
-                connectivity = {"error": str(results[5])}
+                logger.error(f"交换机采集异常：{results[5]}")
+                devices["switch"] = {"status": "error", "error": str(results[5])}
+
+            # 连通性
+            if isinstance(results[6], dict):
+                connectivity = results[6]
+            else:
+                logger.error(f"连通性探测异常：{results[6]}")
+                connectivity = {"error": str(results[6])}
 
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             _current_status = {
