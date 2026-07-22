@@ -47,6 +47,7 @@ async def collect_router() -> dict:
         "tx_rate": None,
         "clients": None,
         "uptime": None,
+        "network_mode": None,
     }
 
     # 先 ping 检测
@@ -75,7 +76,8 @@ async def collect_router() -> dict:
                 "cat /sys/class/net/eth0/statistics/tx_bytes; "
                 "arp -a | wc -l; "
                 "cat /proc/uptime; "
-                "cat /sys/class/thermal/thermal_zone0/temp"
+                "cat /sys/class/thermal/thermal_zone0/temp; "
+                "nvram get dhcp_gateway_x"
             )
             r = await conn.run(cmd, timeout=10)
 
@@ -166,6 +168,14 @@ async def collect_router() -> dict:
                             result["cpu_temp"] = round(temp_raw / 1000, 1)
                         except (ValueError, IndexError):
                             pass
+
+                    # 网络模式（网关判断）
+                    if len(lines) >= 9:
+                        gw = lines[8].strip()
+                        if gw == "192.168.50.2":
+                            result["network_mode"] = "proxy"
+                        else:
+                            result["network_mode"] = "direct"
 
     except asyncio.TimeoutError:
         logger.warning(f"主路由 SSH 连接超时: {settings.router_host}")
