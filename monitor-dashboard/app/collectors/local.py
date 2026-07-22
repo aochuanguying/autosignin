@@ -75,8 +75,8 @@ async def _get_system_info(conn) -> dict:
             _run_ssh_command(conn, "df / | tail -1 | awk '{printf \"%.1f\", $5}' | tr -d '%'"),
             _run_ssh_command(conn, "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo ''"),
             _run_ssh_command(conn, "cat /proc/uptime | awk '{print int($1)}'"),
-            _run_ssh_command(conn, "cat /sys/class/net/eth0/statistics/rx_bytes 2>/dev/null; cat /sys/class/net/enp2s0/statistics/rx_bytes 2>/dev/null; cat /sys/class/net/enp1s0/statistics/rx_bytes 2>/dev/null | head -1"),
-            _run_ssh_command(conn, "cat /sys/class/net/eth0/statistics/tx_bytes 2>/dev/null; cat /sys/class/net/enp2s0/statistics/tx_bytes 2>/dev/null; cat /sys/class/net/enp1s0/statistics/tx_bytes 2>/dev/null | head -1"),
+            _run_ssh_command(conn, "cat /sys/class/net/eno0/statistics/rx_bytes 2>/dev/null || cat /sys/class/net/eth0/statistics/rx_bytes 2>/dev/null || cat /sys/class/net/enp2s0/statistics/rx_bytes 2>/dev/null"),
+            _run_ssh_command(conn, "cat /sys/class/net/eno0/statistics/tx_bytes 2>/dev/null || cat /sys/class/net/eth0/statistics/tx_bytes 2>/dev/null || cat /sys/class/net/enp2s0/statistics/tx_bytes 2>/dev/null"),
         )
         
         # CPU 使用率
