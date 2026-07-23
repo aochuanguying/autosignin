@@ -355,6 +355,74 @@ def get_call_log():
         }), 500
 
 
+@app.route('/api/v1/audi/token', methods=['GET'])
+@require_auth
+def get_audi_token():
+    """
+    获取一汽奥迪 APP Token
+    GET /api/v1/audi/token
+    从 APP WebView Cookies 数据库中提取有效的 Access Token
+    """
+    try:
+        cookies_db = '/data/data/com.timanetworks.android.frame.audisuper.release/app_webview/Default/Cookies'
+        sqlite3_path = '/data/data/com.termux/files/usr/bin/sqlite3'
+
+        # 查询 WebView Cookies 中的 token
+        sql = "SELECT value FROM cookies WHERE name='token' AND host_key LIKE '%faw-vw.com' ORDER BY last_access_utc DESC LIMIT 1;"
+
+        try:
+            proc = subprocess.run(
+                ['su', '--mount-master', '-c', f'{sqlite3_path} {cookies_db} "{sql}"'],
+                capture_output=True, text=True, timeout=10
+            )
+            token = proc.stdout.strip() if proc.returncode == 0 else ''
+        except Exception as e:
+            token = ''
+            logger.error(f"主查询异常: {e}")
+
+        if not token:
+            # 备用查询
+            sql2 = "SELECT value FROM cookies WHERE value LIKE 'eyJ%' AND host_key LIKE '%faw-vw.com' ORDER BY last_access_utc DESC LIMIT 1;"
+            try:
+                proc2 = subprocess.run(
+                    ['su', '--mount-master', '-c', f'{sqlite3_path} {cookies_db} "{sql2}"'],
+                    capture_output=True, text=True, timeout=10
+                )
+                token = proc2.stdout.strip() if proc2.returncode == 0 else ''
+            except Exception as e:
+                logger.error(f"备用查询异常: {e}")
+
+            if not token:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to extract token from APP cookies'
+                }), 502
+
+        if not token.startswith('eyJ'):
+            return jsonify({
+                'success': False,
+                'error': 'Extracted value is not a valid JWT token',
+                'details': token[:100]
+            }), 502
+
+        logger.info(f"一汽奥迪 Token 提取成功，长度: {len(token)}")
+        return jsonify({
+            'success': True,
+            'data': {
+                'token': token,
+                'source': 'app_webview/Cookies (faw-vw.com)',
+                'token_length': len(token)
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"获取奥迪 Token 异常：{str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.route('/api/v1/device/info', methods=['GET'])
 @require_auth
 def get_device_info():
