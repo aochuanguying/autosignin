@@ -40,20 +40,27 @@
             position: relative;
         }
 
-        /* 背景粒子 */
-        #particles { position: fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:0; opacity:0.6; }
+        /* 背景数字雨 - 纯CSS实现 */
+        #particles {
+            position: fixed; top:0; left:0; width:100%; height:100%;
+            pointer-events:none; z-index:0; opacity:0.3; overflow:hidden;
+        }
+        .rain-col {
+            position: absolute; top: 0; width: 20px; text-align: center;
+            font-family: monospace; font-size: 14px; line-height: 1.2;
+            color: rgba(52,211,153,0.25);
+        }
 
-        /* 扫描线 */
+        /* 扫描线 - 静态 */
         .scanline {
             position: fixed;
             top: 0; left: 0; right: 0;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, rgba(56,189,248,0.4), rgba(34,211,238,0.6), rgba(56,189,248,0.4), transparent);
-            animation: scanMove 8s linear infinite;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(56,189,248,0.2), rgba(34,211,238,0.3), rgba(56,189,248,0.2), transparent);
             z-index: 100;
             pointer-events: none;
         }
-        @keyframes scanMove { 0%{top:0} 100%{top:100vh} }
+
 
         /* 内容层 */
         .header, .main, .footer { position: relative; z-index: 1; }
@@ -84,10 +91,8 @@
             font-weight: 700;
             font-variant-numeric: tabular-nums;
             color: var(--cyan);
-            text-shadow: 0 0 10px rgba(34, 211, 238, 0.5), 0 0 30px rgba(34, 211, 238, 0.2);
-            animation: clockGlow 2s ease-in-out infinite alternate;
+            text-shadow: 0 0 10px rgba(34, 211, 238, 0.5);
         }
-        @keyframes clockGlow { 0%{text-shadow:0 0 10px rgba(34,211,238,0.5)} 100%{text-shadow:0 0 20px rgba(34,211,238,0.8),0 0 40px rgba(34,211,238,0.3)} }
 
         .clock-date {
             font-size: 10px;
@@ -145,15 +150,10 @@
         }
 
         .device-card::after {
-            content: '';
-            position: absolute;
-            top: 0; left: -100%;
-            width: 100%; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(56,189,248,0.03), transparent);
-            animation: cardSweep 6s ease-in-out infinite;
-            pointer-events: none;
+            display: none;
         }
         @keyframes cardSweep { 0%{left:-100%} 50%{left:100%} 100%{left:100%} }
+
 
         .device-header {
             display: flex;
@@ -183,12 +183,6 @@
             border-radius: 50%;
             flex-shrink: 0;
             margin-top: 3px;
-            animation: pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
         }
 
         .status-dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); }
@@ -278,8 +272,8 @@
             transition: all 0.3s;
         }
 
-        .conn-dot.ok { background: var(--green); box-shadow: 0 0 10px var(--green), 0 0 20px rgba(52,211,153,0.2); animation: connPulse 2s ease-in-out infinite; }
-        .conn-dot.timeout { background: var(--red); box-shadow: 0 0 10px var(--red), 0 0 20px rgba(248,113,113,0.2); animation: connPulse 1.5s ease-in-out infinite; }
+        .conn-dot.ok { background: var(--green); box-shadow: 0 0 10px var(--green), 0 0 20px rgba(52,211,153,0.2); }
+        .conn-dot.timeout { background: var(--red); box-shadow: 0 0 10px var(--red), 0 0 20px rgba(248,113,113,0.2); }
         .conn-dot.error { background: var(--red); box-shadow: 0 0 8px var(--red); }
         .conn-dot.unknown { background: var(--yellow); }
         @keyframes connPulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.3);opacity:0.7} }
@@ -309,7 +303,7 @@
 </head>
 <body>
     <div class="scanline"></div>
-    <canvas id="particles"></canvas>
+    <div id="particles"></div>
     <div class="header">
         <div class="header-title">Server Monitor</div>
         <div class="header-clock">
@@ -592,40 +586,21 @@
         }
         connectSSE();
 
-        // Matrix 数字雨背景
+        // 数字雨 - 静态背景纹理（不动画，零 CPU）
         (function(){
-            const c=document.getElementById('particles'),ctx=c.getContext('2d');
-            let w,h,cols,drops=[];
-            const chars='ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789ABCDEF<>{}[]|/\\';
-            const fontSize=14;
-            function resize(){
-                w=c.width=window.innerWidth;h=c.height=window.innerHeight;
-                cols=Math.floor(w/fontSize);
-                drops=Array(cols).fill(0).map(()=>Math.random()*-100);
+            const container = document.getElementById('particles');
+            const chars = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄ0123456789';
+            const colCount = 30;
+            for(let i=0; i<colCount; i++){
+                const col = document.createElement('div');
+                col.className = 'rain-col';
+                col.style.left = (i * (100/colCount)) + '%';
+                col.style.top = (-Math.random()*50) + '%';
+                let text = '';
+                for(let j=0; j<40; j++) text += chars[Math.floor(Math.random()*chars.length)] + '<br>';
+                col.innerHTML = text;
+                container.appendChild(col);
             }
-            resize(); window.addEventListener('resize',resize);
-            function draw(){
-                ctx.fillStyle='rgba(10,14,26,0.05)';
-                ctx.fillRect(0,0,w,h);
-                for(let i=0;i<cols;i++){
-                    const ch=chars[Math.floor(Math.random()*chars.length)];
-                    const y=drops[i]*fontSize;
-                    // 头部亮绿，尾部暗绿
-                    if(Math.random()>0.98){
-                        ctx.fillStyle='rgba(34,211,238,0.9)';
-                        ctx.shadowBlur=8;ctx.shadowColor='#22d3ee';
-                    } else {
-                        ctx.fillStyle=`rgba(52,211,153,${0.15+Math.random()*0.15})`;
-                        ctx.shadowBlur=0;
-                    }
-                    ctx.font=fontSize+'px monospace';
-                    ctx.fillText(ch,i*fontSize,y);
-                    ctx.shadowBlur=0;
-                    if(y>h&&Math.random()>0.975) drops[i]=0;
-                    drops[i]+=0.5+Math.random()*0.5;
-                }
-            }
-            setInterval(draw,50);
         })();
     </script>
 </body>
