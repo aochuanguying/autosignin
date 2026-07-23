@@ -5,6 +5,7 @@ var CONFIG = {
     iconUrl: "https://sf16-passport-sg.ibytedtos.com/img/user-avatar-alisg/4b93e0266e7787e68d447ef7231066fe~128x128.image",
     phoneNumber: "18953272532",
     apiBaseUrl: "http://localhost:5000",
+    apiToken: "hv2SfP9TVxyGqsdsTh5dTYaWL2iGsqyIzErhJjGvBzc",
     screenOffAfterRun: true
 };
 
@@ -74,9 +75,16 @@ function callByApi() {
         console.log("[callByApi] 请求 URL: " + url);
         console.log("[callByApi] 目标号码：" + CONFIG.phoneNumber);
         
-        // 使用 http.postJson 发送 JSON 请求
-        var response = http.postJson(url, {
-            phone_number: CONFIG.phoneNumber
+        // 使用 http.request 发送带 Authorization header 的 JSON 请求
+        var response = http.request(url, {
+            method: "POST",
+            contentType: "application/json",
+            headers: {
+                "Authorization": "Bearer " + CONFIG.apiToken
+            },
+            body: JSON.stringify({
+                phone_number: CONFIG.phoneNumber
+            })
         });
         
         var responseBody = response.body.string();
